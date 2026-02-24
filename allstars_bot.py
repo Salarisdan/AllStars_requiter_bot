@@ -109,7 +109,7 @@ def save_to_sheet(data: dict) -> bool:
         ])
         return True
     except Exception as e:
-        logger.error(f"Sheets error: {e}")
+        logger.error(f"Sheets error: {type(e).__name__}: {e}", exc_info=True)
         return False
 
 
