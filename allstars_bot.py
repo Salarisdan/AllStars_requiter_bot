@@ -74,30 +74,39 @@ def get_sheet():
         if _gs_sheet is not None:
             _gs_sheet.spreadsheet.fetch_sheet_metadata()
             return _gs_sheet
-    except Exception:
+    except Exception as e:
+        logger.error(f"Sheet health check failed: {e}")
         _gs_client = None
         _gs_sheet  = None
 
-    scopes = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds      = Credentials.from_service_account_info(GOOGLE_CREDS, scopes=scopes)
-    _gs_client = gspread.authorize(creds)
-    _gs_sheet  = _gs_client.open(SPREADSHEET_NAME).sheet1
+    try:
+        logger.info("Connecting to Google Sheets...")
+        scopes = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds      = Credentials.from_service_account_info(GOOGLE_CREDS, scopes=scopes)
+        _gs_client = gspread.authorize(creds)
+        logger.info("Authorized successfully, opening spreadsheet...")
+        _gs_sheet  = _gs_client.open(SPREADSHEET_NAME).sheet1
+        logger.info("Spreadsheet opened successfully!")
 
-    if not _gs_sheet.row_values(1):
-        _gs_sheet.append_row([
-            "Дата", "TG Username", "TG ID",
-            "Источник", "Имя", "Возраст",
-            "Английский", "Платформа", "Смены",
-            "Опыт", "Анкеты",
-        ])
-    return _gs_sheet
+        if not _gs_sheet.row_values(1):
+            _gs_sheet.append_row([
+                "Дата", "TG Username", "TG ID",
+                "Источник", "Имя", "Возраст",
+                "Английский", "Платформа", "Смены",
+                "Опыт", "Анкеты",
+            ])
+        return _gs_sheet
+    except Exception as e:
+        logger.error(f"Failed to connect: {type(e).__name__}: {e}", exc_info=True)
+        raise
 
 
 def save_to_sheet(data: dict) -> bool:
     try:
+        logger.info("Saving to Google Sheets...")
         sheet = get_sheet()
         sheet.append_row([
             datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -107,6 +116,7 @@ def save_to_sheet(data: dict) -> bool:
             data.get("platform", ""), data.get("shifts", ""),
             data.get("experience", ""), data.get("profiles", ""),
         ])
+        logger.info("Saved to Google Sheets successfully!")
         return True
     except Exception as e:
         logger.error(f"Sheets error: {type(e).__name__}: {e}", exc_info=True)
@@ -215,7 +225,7 @@ TOOLS_ONLYMONSTER_TEXT = """\
 ├ 🎁 Продажа кастомов
 └ 📤 Рассылка контента
 
-_Вам нужно будет его скачать на пк или ноутбук._\
+_Ничего не нужно устанавливать — работаешь через браузер._\
 """
 
 TOOLS_CRM_TEXT = """\
@@ -407,6 +417,10 @@ FAQ_TEXT = """\
 
 ▸ *Минимальный возраст?*
 18 лет — строго.
+
+▸ *Сколько можно зарабатывать?*
+На обучающей странице — 2–2,5k$/мес.
+На топовой (топ 0.5%) — до 60k$/мес.
 
 ▸ *Можно работать из любой страны?*
 Да, работаем полностью удалённо.
