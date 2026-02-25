@@ -195,10 +195,10 @@ def get_waitlist_sheet():
         try:
             return spreadsheet.worksheet("Ожидание")
         except Exception:
-            sheet = spreadsheet.add_worksheet(title="Ожидание", rows=1000, cols=8)
+            sheet = spreadsheet.add_worksheet(title="Ожидание", rows=1000, cols=9)
             sheet.append_row([
                 "Дата", "TG Username", "TG ID", "Имя",
-                "Возраст", "Английский", "Смены (хотел)", "Источник",
+                "Возраст", "Английский", "Платформа", "Смены (хотел)", "Источник",
             ])
             return sheet
     except Exception as e:
@@ -217,6 +217,7 @@ def save_waitlist(data: dict) -> bool:
             data.get("name", ""),
             data.get("age", ""),
             data.get("english", ""),
+            data.get("platform", ""),
             data.get("shifts_raw", ""),
             data.get("source", ""),
         ])
