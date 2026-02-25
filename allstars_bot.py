@@ -195,10 +195,12 @@ def get_waitlist_sheet():
         try:
             return spreadsheet.worksheet("Ожидание")
         except Exception:
-            sheet = spreadsheet.add_worksheet(title="Ожидание", rows=1000, cols=9)
+            sheet = spreadsheet.add_worksheet(title="Ожидание", rows=1000, cols=12)
             sheet.append_row([
-                "Дата", "TG Username", "TG ID", "Имя",
-                "Возраст", "Английский", "Платформа", "Смены (хотел)", "Источник",
+                "Дата", "TG Username", "TG ID",
+                "Откуда узнали", "Имя", "Возраст",
+                "Английский", "Платформа", "Смена",
+                "Опыт", "Анкеты (топ, %)", "Верификация",
             ])
             return sheet
     except Exception as e:
@@ -207,19 +209,22 @@ def get_waitlist_sheet():
 
 
 def save_waitlist(data: dict) -> bool:
-    """Сохраняет кандидата в лист ожидания."""
+    """Сохраняет кандидата в лист ожидания — полная анкета."""
     try:
         sheet = get_waitlist_sheet()
         sheet.append_row([
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             data.get("username", ""),
             data.get("user_id", ""),
+            data.get("source", ""),
             data.get("name", ""),
             data.get("age", ""),
             data.get("english", ""),
             data.get("platform", ""),
-            data.get("shifts_raw", ""),
-            data.get("source", ""),
+            data.get("shifts", ""),
+            data.get("experience", ""),
+            data.get("profiles", ""),
+            data.get("verification", ""),
         ])
         logger.info("Waitlist entry saved.")
         return True
@@ -1039,34 +1044,7 @@ async def q6_shift_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return Q6_SHIFT
 
         shifts_str = ", ".join(context.user_data["shifts"])
-        has_open   = any(s in open_shifts for s in context.user_data["shifts"])
-
         await q.edit_message_text(f"🕐 Смены: *{shifts_str}* ✅", parse_mode="Markdown")
-
-        if not has_open:
-            shift_names = {
-                "00-06": "🌙 00:00–06:00", "06-12": "🌅 06:00–12:00",
-                "12-18": "☀️ 12:00–18:00", "18-00": "🌆 18:00–00:00",
-            }
-            platform  = context.user_data.get("platform", "")
-            open_list = " · ".join(shift_names[s] for s in open_shifts) if open_shifts else "пока нет открытых смен"
-            context.user_data["shifts_raw"] = shifts_str
-            await q.message.reply_text(
-                "╔══════════════════════════════╗\n"
-                "║   ⏳  СМЕНЫ ПЕРЕПОЛНЕНЫ     ║\n"
-                "╚══════════════════════════════╝\n\n"
-                f"К сожалению, выбранные смены сейчас *закрыты для набора* на *{platform}*.\n\n"
-                f"🟢 *Сейчас открыт набор на:* {open_list}\n\n"
-                "Мы можем добавить тебя в *лист ожидания* — как только смена откроется, HR-менеджер напишет тебе лично.\n\n"
-                "*Хочешь попасть в лист ожидания?*",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ Да, добавьте меня", callback_data="waitlist_yes")],
-                    [InlineKeyboardButton("❌ Нет, спасибо",      callback_data="waitlist_no")],
-                ]),
-            )
-            return Q_WAITLIST
-
         await q.message.reply_text(
             f"{progress(6)}\n\n*Вопрос 7 из 9:*\nЕсть ли у вас опыт работы оператором/чаттером?\nЕсли да — укажите, сколько по времени:",
             parse_mode="Markdown", reply_markup=cancel_keyboard(),
@@ -1089,22 +1067,29 @@ async def waitlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     if q.data == "waitlist_yes":
-        context.user_data["user_id"]  = update.effective_user.id
-        context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
         save_waitlist(context.user_data)
         await q.edit_message_reply_markup(reply_markup=None)
         await q.message.chat.send_action(ChatAction.TYPING)
         await asyncio.sleep(1.0)
-        await q.message.reply_text(
+        d = context.user_data
+        card = (
             "╔══════════════════════════════╗\n"
             "║   ✅  ДОБАВЛЕН В ОЖИДАНИЕ  ║\n"
             "╚══════════════════════════════╝\n\n"
+            f"👤 *Имя:* {d.get('name', '—')}\n"
+            f"🎂 *Возраст:* {d.get('age', '—')}\n"
+            f"🌐 *Английский:* {d.get('english', '—')}\n"
+            f"📱 *Платформа:* {d.get('platform', '—')}\n"
+            f"🕐 *Смены:* {d.get('shifts', '—')}\n"
+            f"💼 *Опыт:* {d.get('experience', '—')}\n"
+            f"📊 *Анкеты:* {d.get('profiles', '—')}\n"
+            f"🪪 *Верификация:* {d.get('verification', '—')}\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "Отлично! Мы сохранили твою кандидатуру. 🤝\n\n"
             "Как только нужная смена откроется — HR-менеджер *лично напишет тебе* в Telegram.\n\n"
-            "_Пока ждёшь — можешь изучить разделы «🏢 Об агентстве» и «🛠 Инструменты» 👇_",
-            parse_mode="Markdown",
-            reply_markup=main_keyboard(),
+            "_Пока ждёшь — можешь изучить разделы «🏢 Об агентстве» и «🛠 Инструменты» 👇_"
         )
+        await q.message.reply_text(card, parse_mode="Markdown", reply_markup=main_keyboard())
     else:
         await q.edit_message_reply_markup(reply_markup=None)
         await q.message.reply_text(
@@ -1154,7 +1139,6 @@ async def q9_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if q.data == "verif_no":
         await q.edit_message_text("🪪 Верификация: *❌ Нет*", parse_mode="Markdown")
-        # Сохраняем в лист отказов
         context.user_data["user_id"]  = update.effective_user.id
         context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
         save_rejection(context.user_data)
@@ -1174,20 +1158,51 @@ async def q9_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return ConversationHandler.END
 
-    # Ответ "Да"
-    answer = "✅ Да"
-    context.user_data["verification"] = answer
-    await q.edit_message_text(f"🪪 Верификация: *{answer}*", parse_mode="Markdown")
+    # Верификация — Да
+    context.user_data["verification"] = "✅ Да"
+    context.user_data["user_id"]      = update.effective_user.id
+    context.user_data["username"]     = update.effective_user.username or update.effective_user.full_name
+    context.user_data["shifts"]       = ", ".join(context.user_data.get("shifts", []))
 
-    context.user_data["user_id"]  = update.effective_user.id
-    context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
-    context.user_data["shifts"]   = ", ".join(context.user_data.get("shifts", []))
+    await q.edit_message_text("🪪 Верификация: *✅ Да*", parse_mode="Markdown")
 
+    # Проверяем — выбранные смены открыты?
+    open_shifts     = context.user_data.get("open_shifts", [])
+    selected_shifts = [s.strip() for s in context.user_data.get("shifts", "").split(",") if s.strip()]
+    has_open        = any(s in open_shifts for s in selected_shifts)
+
+    if not has_open:
+        # Смены закрыты — предлагаем лист ожидания
+        shift_names = {
+            "00-06": "🌙 00:00–06:00", "06-12": "🌅 06:00–12:00",
+            "12-18": "☀️ 12:00–18:00", "18-00": "🌆 18:00–00:00",
+        }
+        platform  = context.user_data.get("platform", "")
+        open_list = " · ".join(shift_names[s] for s in open_shifts) if open_shifts else "пока нет открытых смен"
+
+        await q.message.chat.send_action(ChatAction.TYPING)
+        await asyncio.sleep(1.0)
+        await q.message.reply_text(
+            "╔══════════════════════════════╗\n"
+            "║   ⏳  СМЕНЫ ПЕРЕПОЛНЕНЫ     ║\n"
+            "╚══════════════════════════════╝\n\n"
+            f"Анкета заполнена отлично! Но выбранные смены сейчас *закрыты для набора* на *{platform}*.\n\n"
+            f"🟢 *Сейчас открыт набор на:* {open_list}\n\n"
+            "Мы можем добавить тебя в *лист ожидания* — как только смена откроется, HR-менеджер напишет тебе лично.\n\n"
+            "*Хочешь попасть в лист ожидания?*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Да, добавьте меня", callback_data="waitlist_yes")],
+                [InlineKeyboardButton("❌ Нет, спасибо",      callback_data="waitlist_no")],
+            ]),
+        )
+        return Q_WAITLIST
+
+    # Смены открыты — сохраняем в основную таблицу
     saved = save_to_sheet(context.user_data)
 
     if saved:
         await notify_hr(context, context.user_data)
-
         d = context.user_data
         card = (
             f"{progress(9)}\n\n"
