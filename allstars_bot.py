@@ -25,9 +25,29 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 BOT_TOKEN        = os.getenv("BOT_TOKEN", "8326443265:AAFAC5HFM_Bubhqya0xImJAkdvwt3LQdyXI")
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "AllStarsLeads")
-HR_CHAT_ID       = int(os.getenv("HR_CHAT_ID", "0"))   # ← Telegram ID HR-менеджера
-BOT_USERNAME     = os.getenv("BOT_USERNAME", "allstars_hr_bot")  # ← username бота без @
-BANNER_GDRIVE_ID = "1-15wE_zOrskUqb5sClN4hTS_Bi91AlwE"   # Welcome-баннер
+HR_CHAT_ID       = int(os.getenv("HR_CHAT_ID", "0"))
+BOT_USERNAME     = os.getenv("BOT_USERNAME", "allstars_hr_bot")
+BANNER_GDRIVE_ID = "1-15wE_zOrskUqb5sClN4hTS_Bi91AlwE"
+
+# ── Открытые смены по платформам — меняй в Railway Variables ─
+# Формат: коды через запятую.  Коды: 00-06 | 06-12 | 12-18 | 18-00
+# Пример: OPEN_SHIFTS_ONLYFANS = "06-12"
+#         OPEN_SHIFTS_FANSLY   = "12-18,18-00"
+def _parse_shifts(raw: str) -> list[str]:
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+OPEN_SHIFTS_ONLYFANS = _parse_shifts(os.getenv("OPEN_SHIFTS_ONLYFANS", "12-18"))
+OPEN_SHIFTS_FANSLY   = _parse_shifts(os.getenv("OPEN_SHIFTS_FANSLY",   "12-18"))
+
+
+def get_open_shifts_for(platform: str) -> list[str]:
+    """Возвращает список открытых смен для выбранной платформы."""
+    if platform == "OnlyFans":
+        return OPEN_SHIFTS_ONLYFANS
+    elif platform == "Fansly":
+        return OPEN_SHIFTS_FANSLY
+    else:  # Обе платформы — объединение
+        return list(set(OPEN_SHIFTS_ONLYFANS) | set(OPEN_SHIFTS_FANSLY))
 
 # ── ID изображений для каждого раздела ──────────────────
 SECTION_IMAGES = {
@@ -60,13 +80,14 @@ GOOGLE_CREDS = {
 # ─────────────────────────────────────────────
 #  СОСТОЯНИЯ ДИАЛОГА
 # ─────────────────────────────────────────────
-Q1_SOURCE, Q2_NAME, Q3_AGE, Q4_ENGLISH, Q5_PLATFORM, Q6_SHIFT, Q7_EXPERIENCE, Q8_PROFILES, Q9_VERIFICATION = range(9)
+Q1_SOURCE, Q2_NAME, Q3_AGE, Q4_ENGLISH, Q5_PLATFORM, Q6_SHIFT, Q7_EXPERIENCE, Q8_PROFILES, Q9_VERIFICATION, Q_WAITLIST = range(10)
 
 # ─────────────────────────────────────────────
 #  GOOGLE SHEETS — кэшированный клиент
 # ─────────────────────────────────────────────
 _gs_client = None
 _gs_sheet  = None
+_gs_rejections = None  # Лист с отказами от верификации
 
 def get_sheet():
     global _gs_client, _gs_sheet
@@ -104,6 +125,28 @@ def get_sheet():
         raise
 
 
+def get_rejections_sheet():
+    """Возвращает лист 'Отказы', создаёт его если не существует."""
+    global _gs_rejections, _gs_client
+    try:
+        if _gs_rejections is not None:
+            return _gs_rejections
+        # Убеждаемся что основной клиент подключён
+        get_sheet()
+        spreadsheet = _gs_client.open(SPREADSHEET_NAME)
+        # Ищем лист "Отказы"
+        try:
+            _gs_rejections = spreadsheet.worksheet("Отказы")
+        except Exception:
+            # Создаём новый лист
+            _gs_rejections = spreadsheet.add_worksheet(title="Отказы", rows=1000, cols=6)
+            _gs_rejections.append_row(["Дата", "TG Username", "TG ID", "Имя", "Возраст", "Источник"])
+        return _gs_rejections
+    except Exception as e:
+        logger.error(f"Rejections sheet error: {type(e).__name__}: {e}", exc_info=True)
+        raise
+
+
 def save_to_sheet(data: dict) -> bool:
     try:
         logger.info("Saving to Google Sheets...")
@@ -121,6 +164,66 @@ def save_to_sheet(data: dict) -> bool:
         return True
     except Exception as e:
         logger.error(f"Sheets error: {type(e).__name__}: {e}", exc_info=True)
+        return False
+
+
+def save_rejection(data: dict) -> bool:
+    """Сохраняет отказ от верификации в отдельный лист."""
+    try:
+        sheet = get_rejections_sheet()
+        sheet.append_row([
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            data.get("username", ""),
+            data.get("user_id", ""),
+            data.get("name", ""),
+            data.get("age", ""),
+            data.get("source", ""),
+        ])
+        logger.info("Rejection saved to sheet.")
+        return True
+    except Exception as e:
+        logger.error(f"Rejection save error: {type(e).__name__}: {e}", exc_info=True)
+        return False
+
+
+def get_waitlist_sheet():
+    """Возвращает лист 'Ожидание', создаёт если не существует."""
+    global _gs_client
+    try:
+        get_sheet()
+        spreadsheet = _gs_client.open(SPREADSHEET_NAME)
+        try:
+            return spreadsheet.worksheet("Ожидание")
+        except Exception:
+            sheet = spreadsheet.add_worksheet(title="Ожидание", rows=1000, cols=8)
+            sheet.append_row([
+                "Дата", "TG Username", "TG ID", "Имя",
+                "Возраст", "Английский", "Смены (хотел)", "Источник",
+            ])
+            return sheet
+    except Exception as e:
+        logger.error(f"Waitlist sheet error: {type(e).__name__}: {e}", exc_info=True)
+        raise
+
+
+def save_waitlist(data: dict) -> bool:
+    """Сохраняет кандидата в лист ожидания."""
+    try:
+        sheet = get_waitlist_sheet()
+        sheet.append_row([
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            data.get("username", ""),
+            data.get("user_id", ""),
+            data.get("name", ""),
+            data.get("age", ""),
+            data.get("english", ""),
+            data.get("shifts_raw", ""),
+            data.get("source", ""),
+        ])
+        logger.info("Waitlist entry saved.")
+        return True
+    except Exception as e:
+        logger.error(f"Waitlist save error: {type(e).__name__}: {e}", exc_info=True)
         return False
 
 
@@ -494,21 +597,29 @@ def platform_keyboard():
         [InlineKeyboardButton("💎 Обе платформы", callback_data="plat_both")],
     ])
 
-def shift_keyboard(selected=None):
-    selected = selected or []
+def shift_keyboard(selected=None, open_shifts=None):
+    selected    = selected    or []
+    open_shifts = open_shifts or []
     shifts = [
         ("🌙 00:00 – 06:00", "00-06"),
         ("🌅 06:00 – 12:00", "06-12"),
         ("☀️ 12:00 – 18:00", "12-18"),
         ("🌆 18:00 – 00:00", "18-00"),
     ]
-    kb = [
-        [InlineKeyboardButton(
-            f"{'✅ ' if code in selected else '☐ '}{label}",
+    kb = []
+    for label, code in shifts:
+        is_open     = code in open_shifts
+        is_selected = code in selected
+        if is_open:
+            prefix = "✅ " if is_selected else "🟢 "
+            suffix = " — НАБОР" if not is_selected else ""
+        else:
+            prefix = "✅ " if is_selected else "☐ "
+            suffix = ""
+        kb.append([InlineKeyboardButton(
+            f"{prefix}{label}{suffix}",
             callback_data=f"shift_{code}",
-        )]
-        for label, code in shifts
-    ]
+        )])
     kb.append([InlineKeyboardButton("✔️ Подтвердить выбор", callback_data="shift_done")])
     return InlineKeyboardMarkup(kb)
 
@@ -894,12 +1005,24 @@ async def q5_platform_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     mapping = {"plat_onlyfans": "OnlyFans", "plat_fansly": "Fansly", "plat_both": "Обе платформы"}
     platform = mapping[q.data]
-    context.user_data["platform"] = platform
+    context.user_data["platform"]    = platform
+    context.user_data["open_shifts"] = get_open_shifts_for(platform)
     await q.edit_message_text(f"📱 Платформа: *{platform}* ✅", parse_mode="Markdown")
     context.user_data["shifts"] = []
+
+    open_shifts = context.user_data["open_shifts"]
+    shift_names = {
+        "00-06": "🌙 00:00–06:00", "06-12": "🌅 06:00–12:00",
+        "12-18": "☀️ 12:00–18:00", "18-00": "🌆 18:00–00:00",
+    }
+    open_list = " · ".join(shift_names[s] for s in open_shifts) if open_shifts else "нет открытых смен"
+
     await q.message.reply_text(
-        f"{progress(5)}\n\n*Вопрос 6 из 8:*\nКакая смена вам подходит?\n_Можно выбрать несколько, затем нажмите «Подтвердить»._",
-        parse_mode="Markdown", reply_markup=shift_keyboard(),
+        f"{progress(5)}\n\n*Вопрос 6 из 9:*\nКакая смена вам подходит?\n\n"
+        f"🟢 *Сейчас открыт набор ({platform}):* {open_list}\n\n"
+        "_Можно выбрать несколько, затем нажмите «Подтвердить»._",
+        parse_mode="Markdown",
+        reply_markup=shift_keyboard(open_shifts=open_shifts),
     )
     return Q6_SHIFT
 
@@ -907,17 +1030,48 @@ async def q5_platform_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def q6_shift_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    open_shifts = context.user_data.get("open_shifts", [])
+
     if q.data == "shift_done":
         if not context.user_data.get("shifts"):
             await q.answer("⚠️ Выберите хотя бы одну смену!", show_alert=True)
             return Q6_SHIFT
+
         shifts_str = ", ".join(context.user_data["shifts"])
+        has_open   = any(s in open_shifts for s in context.user_data["shifts"])
+
         await q.edit_message_text(f"🕐 Смены: *{shifts_str}* ✅", parse_mode="Markdown")
+
+        if not has_open:
+            shift_names = {
+                "00-06": "🌙 00:00–06:00", "06-12": "🌅 06:00–12:00",
+                "12-18": "☀️ 12:00–18:00", "18-00": "🌆 18:00–00:00",
+            }
+            platform  = context.user_data.get("platform", "")
+            open_list = " · ".join(shift_names[s] for s in open_shifts) if open_shifts else "пока нет открытых смен"
+            context.user_data["shifts_raw"] = shifts_str
+            await q.message.reply_text(
+                "╔══════════════════════════════╗\n"
+                "║   ⏳  СМЕНЫ ПЕРЕПОЛНЕНЫ     ║\n"
+                "╚══════════════════════════════╝\n\n"
+                f"К сожалению, выбранные смены сейчас *закрыты для набора* на *{platform}*.\n\n"
+                f"🟢 *Сейчас открыт набор на:* {open_list}\n\n"
+                "Мы можем добавить тебя в *лист ожидания* — как только смена откроется, HR-менеджер напишет тебе лично.\n\n"
+                "*Хочешь попасть в лист ожидания?*",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ Да, добавьте меня", callback_data="waitlist_yes")],
+                    [InlineKeyboardButton("❌ Нет, спасибо",      callback_data="waitlist_no")],
+                ]),
+            )
+            return Q_WAITLIST
+
         await q.message.reply_text(
-            f"{progress(6)}\n\n*Вопрос 7 из 8:*\nЕсть ли у вас опыт работы оператором/чаттером?\nЕсли да — укажите, сколько по времени:",
+            f"{progress(6)}\n\n*Вопрос 7 из 9:*\nЕсть ли у вас опыт работы оператором/чаттером?\nЕсли да — укажите, сколько по времени:",
             parse_mode="Markdown", reply_markup=cancel_keyboard(),
         )
         return Q7_EXPERIENCE
+
     shift = q.data.replace("shift_", "")
     shifts = context.user_data.get("shifts", [])
     if shift in shifts:
@@ -925,8 +1079,38 @@ async def q6_shift_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         shifts.append(shift)
     context.user_data["shifts"] = shifts
-    await q.edit_message_reply_markup(reply_markup=shift_keyboard(shifts))
+    await q.edit_message_reply_markup(reply_markup=shift_keyboard(shifts, open_shifts=open_shifts))
     return Q6_SHIFT
+
+
+async def waitlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    if q.data == "waitlist_yes":
+        context.user_data["user_id"]  = update.effective_user.id
+        context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
+        save_waitlist(context.user_data)
+        await q.edit_message_reply_markup(reply_markup=None)
+        await q.message.chat.send_action(ChatAction.TYPING)
+        await asyncio.sleep(1.0)
+        await q.message.reply_text(
+            "╔══════════════════════════════╗\n"
+            "║   ✅  ДОБАВЛЕН В ОЖИДАНИЕ  ║\n"
+            "╚══════════════════════════════╝\n\n"
+            "Отлично! Мы сохранили твою кандидатуру. 🤝\n\n"
+            "Как только нужная смена откроется — HR-менеджер *лично напишет тебе* в Telegram.\n\n"
+            "_Пока ждёшь — можешь изучить разделы «🏢 Об агентстве» и «🛠 Инструменты» 👇_",
+            parse_mode="Markdown",
+            reply_markup=main_keyboard(),
+        )
+    else:
+        await q.edit_message_reply_markup(reply_markup=None)
+        await q.message.reply_text(
+            "Понял! Если передумаешь — возвращайся, мы всегда рады. 👋",
+            reply_markup=main_keyboard(),
+        )
+    return ConversationHandler.END
 
 
 async def q7_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -969,6 +1153,10 @@ async def q9_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if q.data == "verif_no":
         await q.edit_message_text("🪪 Верификация: *❌ Нет*", parse_mode="Markdown")
+        # Сохраняем в лист отказов
+        context.user_data["user_id"]  = update.effective_user.id
+        context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
+        save_rejection(context.user_data)
         await q.message.chat.send_action(ChatAction.TYPING)
         await asyncio.sleep(1.2)
         await q.message.reply_text(
@@ -1056,8 +1244,9 @@ def main():
             Q5_PLATFORM:   [CallbackQueryHandler(q5_platform_cb, pattern="^plat_")],
             Q6_SHIFT:      [CallbackQueryHandler(q6_shift_cb, pattern="^shift_")],
             Q7_EXPERIENCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, q7_experience)],
-            Q8_PROFILES:   [MessageHandler(filters.TEXT & ~filters.COMMAND, q8_profiles)],
+            Q8_PROFILES:     [MessageHandler(filters.TEXT & ~filters.COMMAND, q8_profiles)],
             Q9_VERIFICATION: [CallbackQueryHandler(q9_verification_cb, pattern="^verif_")],
+            Q_WAITLIST:      [CallbackQueryHandler(waitlist_cb, pattern="^waitlist_")],
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
