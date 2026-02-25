@@ -60,7 +60,7 @@ GOOGLE_CREDS = {
 # ─────────────────────────────────────────────
 #  СОСТОЯНИЯ ДИАЛОГА
 # ─────────────────────────────────────────────
-Q1_SOURCE, Q2_NAME, Q3_AGE, Q4_ENGLISH, Q5_PLATFORM, Q6_SHIFT, Q7_EXPERIENCE, Q8_PROFILES = range(8)
+Q1_SOURCE, Q2_NAME, Q3_AGE, Q4_ENGLISH, Q5_PLATFORM, Q6_SHIFT, Q7_EXPERIENCE, Q8_PROFILES, Q9_VERIFICATION = range(9)
 
 # ─────────────────────────────────────────────
 #  GOOGLE SHEETS — кэшированный клиент
@@ -96,7 +96,7 @@ def get_sheet():
                 "Дата", "TG Username", "TG ID",
                 "Источник", "Имя", "Возраст",
                 "Английский", "Платформа", "Смены",
-                "Опыт", "Анкеты",
+                "Опыт", "Анкеты", "Верификация",
             ])
         return _gs_sheet
     except Exception as e:
@@ -115,6 +115,7 @@ def save_to_sheet(data: dict) -> bool:
             data.get("age", ""),      data.get("english", ""),
             data.get("platform", ""), data.get("shifts", ""),
             data.get("experience", ""), data.get("profiles", ""),
+            data.get("verification", ""),
         ])
         logger.info("Saved to Google Sheets successfully!")
         return True
@@ -511,10 +512,16 @@ def shift_keyboard(selected=None):
     kb.append([InlineKeyboardButton("✔️ Подтвердить выбор", callback_data="shift_done")])
     return InlineKeyboardMarkup(kb)
 
+def verification_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Да, согласен(а)", callback_data="verif_yes")],
+        [InlineKeyboardButton("❌ Нет, не готов(а)", callback_data="verif_no")],
+    ])
+
 # ─────────────────────────────────────────────
 #  ПРОГРЕСС-БАР
 # ─────────────────────────────────────────────
-def progress(step: int, total: int = 8) -> str:
+def progress(step: int, total: int = 9) -> str:
     if step == total:
         return "🏆" * total + f"  {step}/{total}"
     filled = "🟩" * step
@@ -597,6 +604,7 @@ async def notify_hr(context: ContextTypes.DEFAULT_TYPE, data: dict):
         f"🕐 *Смены:* {data.get('shifts', '—')}\n"
         f"💼 *Опыт:* {data.get('experience', '—')}\n"
         f"📊 *Анкеты:* {data.get('profiles', '—')}\n"
+        f"🪪 *Верификация:* {data.get('verification', '—')}\n"
         f"📡 *Источник:* {data.get('source', '—')}\n"
         f"🕒 *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M')}"
     )
@@ -926,7 +934,7 @@ async def q7_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await cancel(update, context)
     context.user_data["experience"] = update.message.text
     await update.message.reply_text(
-        f"{progress(7)}\n\n*Вопрос 8 из 8:*\nС какими анкетами работали? Укажите топ и примерный % конверсии.",
+        f"{progress(7)}\n\n*Вопрос 8 из 9:*\nС какими анкетами работали? Укажите топ и примерный % конверсии.",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
     return Q8_PROFILES
@@ -937,6 +945,32 @@ async def q8_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await cancel(update, context)
 
     context.user_data["profiles"] = update.message.text
+
+    await update.message.reply_text(
+        f"{progress(8)}\n\n"
+        "🔴 *Вопрос 9 из 9 — ВАЖНО:*\n\n"
+        "╔══════════════════════════════╗\n"
+        "║  ⚠️  ВЕРИФИКАЦИЯ ЛИЧНОСТИ   ║\n"
+        "╚══════════════════════════════╝\n\n"
+        "После успешной тест-смены мы проводим верификацию:\n\n"
+        "🪪 Фото/скан документа\n"
+        "🎥 Короткое видео с документом в руках\n"
+        "📝 Подписание NDA\n\n"
+        "*Вы согласны пройти верификацию после тест-смены?*",
+        parse_mode="Markdown",
+        reply_markup=verification_keyboard(),
+    )
+    return Q9_VERIFICATION
+
+
+async def q9_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    answer = "✅ Да" if q.data == "verif_yes" else "❌ Нет"
+    context.user_data["verification"] = answer
+    await q.edit_message_text(f"🪪 Верификация: *{answer}*", parse_mode="Markdown")
+
     context.user_data["user_id"]  = update.effective_user.id
     context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
     context.user_data["shifts"]   = ", ".join(context.user_data.get("shifts", []))
@@ -946,10 +980,9 @@ async def q8_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if saved:
         await notify_hr(context, context.user_data)
 
-        # ── Статус-карточка ──
         d = context.user_data
         card = (
-            f"{progress(8)}\n\n"
+            f"{progress(9)}\n\n"
             "╔══════════════════════════════╗\n"
             "║     ✅  АНКЕТА ОТПРАВЛЕНА!  ║\n"
             "╚══════════════════════════════╝\n\n"
@@ -959,15 +992,17 @@ async def q8_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📱 *Платформа:* {d.get('platform', '—')}\n"
             f"🕐 *Смены:* {d.get('shifts', '—')}\n"
             f"💼 *Опыт:* {d.get('experience', '—')}\n"
-            f"📊 *Анкеты:* {d.get('profiles', '—')}\n\n"
+            f"📊 *Анкеты:* {d.get('profiles', '—')}\n"
+            f"🪪 *Верификация:* {d.get('verification', '—')}\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "🎉 Отлично! Наш HR-менеджер свяжется с тобой в ближайшее время для согласования даты созвона.\n\n"
             "_Пока ждёшь — изучи раздел «🏢 Об агентстве» и «💰 Условия работы» 👇_"
         )
-        await typing(update, delay=1.0)
-        await update.message.reply_text(card, parse_mode="Markdown", reply_markup=main_keyboard())
+        await q.message.chat.send_action(ChatAction.TYPING)
+        await asyncio.sleep(1.0)
+        await q.message.reply_text(card, parse_mode="Markdown", reply_markup=main_keyboard())
     else:
-        await update.message.reply_text(
+        await q.message.reply_text(
             "⚠️ *Произошла техническая ошибка при сохранении данных.*\n\n"
             "Пожалуйста, попробуйте заполнить анкету ещё раз через несколько минут.",
             parse_mode="Markdown",
@@ -1003,6 +1038,7 @@ def main():
             Q6_SHIFT:      [CallbackQueryHandler(q6_shift_cb, pattern="^shift_")],
             Q7_EXPERIENCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, q7_experience)],
             Q8_PROFILES:   [MessageHandler(filters.TEXT & ~filters.COMMAND, q8_profiles)],
+            Q9_VERIFICATION: [CallbackQueryHandler(q9_verification_cb, pattern="^verif_")],
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
