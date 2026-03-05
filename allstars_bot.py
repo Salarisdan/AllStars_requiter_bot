@@ -80,7 +80,7 @@ GOOGLE_CREDS = {
 # ─────────────────────────────────────────────
 #  СОСТОЯНИЯ ДИАЛОГА
 # ─────────────────────────────────────────────
-Q1_SOURCE, Q2_NAME, Q3_AGE, Q4_ENGLISH, Q5_PLATFORM, Q6_SHIFT, Q7_EXPERIENCE, Q8_PROFILES, Q9_VERIFICATION, Q_WAITLIST = range(10)
+Q1_SOURCE, Q2_NAME, Q3_AGE, Q4_COUNTRY, Q5_ENGLISH, Q6_PLATFORM, Q7_SHIFT, Q8_EXPERIENCE, Q9_PROFILES, Q10_VERIFICATION, Q_WAITLIST = range(11)
 
 # ─────────────────────────────────────────────
 #  GOOGLE SHEETS — кэшированный клиент
@@ -115,7 +115,7 @@ def get_sheet():
         if not _gs_sheet.row_values(1):
             _gs_sheet.append_row([
                 "Дата", "TG Username", "TG ID",
-                "Источник", "Имя", "Возраст",
+                "Источник", "Имя", "Возраст", "Страна",
                 "Английский", "Платформа", "Смены",
                 "Опыт", "Анкеты", "Верификация",
             ])
@@ -155,10 +155,10 @@ def save_to_sheet(data: dict) -> bool:
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             data.get("username", ""), data.get("user_id", ""),
             data.get("source", ""),   data.get("name", ""),
-            data.get("age", ""),      data.get("english", ""),
-            data.get("platform", ""), data.get("shifts", ""),
-            data.get("experience", ""), data.get("profiles", ""),
-            data.get("verification", ""),
+            data.get("age", ""),      data.get("country", ""),
+            data.get("english", ""),  data.get("platform", ""),
+            data.get("shifts", ""),   data.get("experience", ""),
+            data.get("profiles", ""), data.get("verification", ""),
         ])
         logger.info("Saved to Google Sheets successfully!")
         return True
@@ -195,10 +195,10 @@ def get_waitlist_sheet():
         try:
             return spreadsheet.worksheet("Ожидание")
         except Exception:
-            sheet = spreadsheet.add_worksheet(title="Ожидание", rows=1000, cols=12)
+            sheet = spreadsheet.add_worksheet(title="Ожидание", rows=1000, cols=13)
             sheet.append_row([
                 "Дата", "TG Username", "TG ID",
-                "Откуда узнали", "Имя", "Возраст",
+                "Откуда узнали", "Имя", "Возраст", "Страна",
                 "Английский", "Платформа", "Смена",
                 "Опыт", "Анкеты (топ, %)", "Верификация",
             ])
@@ -219,6 +219,7 @@ def save_waitlist(data: dict) -> bool:
             data.get("source", ""),
             data.get("name", ""),
             data.get("age", ""),
+            data.get("country", ""),
             data.get("english", ""),
             data.get("platform", ""),
             data.get("shifts", ""),
@@ -638,7 +639,7 @@ def verification_keyboard():
 # ─────────────────────────────────────────────
 #  ПРОГРЕСС-БАР
 # ─────────────────────────────────────────────
-def progress(step: int, total: int = 9) -> str:
+def progress(step: int, total: int = 10) -> str:
     if step == total:
         return "🏆" * total + f"  {step}/{total}"
     filled = "🟩" * step
@@ -716,6 +717,7 @@ async def notify_hr(context: ContextTypes.DEFAULT_TYPE, data: dict):
         f"👤 *Имя:* {data.get('name', '—')}\n"
         f"🪪 *TG:* @{data.get('username', '—')} (`{data.get('user_id', '—')}`)\n"
         f"🎂 *Возраст:* {data.get('age', '—')}\n"
+        f"🌍 *Страна:* {data.get('country', '—')}\n"
         f"🌐 *Английский:* {data.get('english', '—')}\n"
         f"📱 *Платформа:* {data.get('platform', '—')}\n"
         f"🕐 *Смены:* {data.get('shifts', '—')}\n"
@@ -948,7 +950,7 @@ async def q1_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await cancel(update, context)
     context.user_data["source"] = update.message.text
     await update.message.reply_text(
-        f"{progress(1)}\n\n*Вопрос 2 из 8:*\nКак вас зовут?",
+        f"{progress(1)}\n\n*Вопрос 2 из 10:*\nКак вас зовут?",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
     return Q2_NAME
@@ -959,7 +961,7 @@ async def q2_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await cancel(update, context)
     context.user_data["name"] = update.message.text
     await update.message.reply_text(
-        f"{progress(2)}\n\n*Вопрос 3 из 8:*\nСколько вам лет?",
+        f"{progress(2)}\n\n*Вопрос 3 из 10:*\nСколько вам лет?",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
     return Q3_AGE
@@ -987,26 +989,37 @@ async def q3_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return Q3_AGE
     context.user_data["age"] = str(age)
     await update.message.reply_text(
-        f"{progress(3)}\n\n*Вопрос 4 из 8:*\nКакой у вас уровень английского языка?",
+        f"{progress(3)}\n\n*Вопрос 4 из 10:*\nИз какой вы страны?",
+        parse_mode="Markdown", reply_markup=cancel_keyboard(),
+    )
+    return Q4_COUNTRY
+
+
+async def q4_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отменить заполнение":
+        return await cancel(update, context)
+    context.user_data["country"] = update.message.text.strip()
+    await update.message.reply_text(
+        f"{progress(4)}\n\n*Вопрос 5 из 10:*\nКакой у вас уровень английского языка?",
         parse_mode="Markdown", reply_markup=english_keyboard(),
     )
-    return Q4_ENGLISH
+    return Q5_ENGLISH
 
 
-async def q4_english_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q5_english_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     level = q.data.replace("eng_", "")
     context.user_data["english"] = level
     await q.edit_message_text(f"🌐 Английский: *{level}* ✅", parse_mode="Markdown")
     await q.message.reply_text(
-        f"{progress(4)}\n\n*Вопрос 5 из 8:*\nКакая платформа вас интересует?",
+        f"{progress(5)}\n\n*Вопрос 6 из 10:*\nКакая платформа вас интересует?",
         parse_mode="Markdown", reply_markup=platform_keyboard(),
     )
-    return Q5_PLATFORM
+    return Q6_PLATFORM
 
 
-async def q5_platform_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q6_platform_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     mapping = {"plat_onlyfans": "OnlyFans", "plat_fansly": "Fansly", "plat_both": "Обе платформы"}
@@ -1024,16 +1037,16 @@ async def q5_platform_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     open_list = " · ".join(shift_names[s] for s in open_shifts) if open_shifts else "нет открытых смен"
 
     await q.message.reply_text(
-        f"{progress(5)}\n\n*Вопрос 6 из 9:*\nКакая смена вам подходит?\n\n"
+        f"{progress(5)}\n\n*Вопрос 7 из 10:*\nКакая смена вам подходит?\n\n"
         f"🟢 *Сейчас открыт набор ({platform}):* {open_list}\n\n"
         "_Можно выбрать несколько, затем нажмите «Подтвердить»._",
         parse_mode="Markdown",
         reply_markup=shift_keyboard(open_shifts=open_shifts),
     )
-    return Q6_SHIFT
+    return Q7_SHIFT
 
 
-async def q6_shift_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q7_shift_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     open_shifts = context.user_data.get("open_shifts", [])
@@ -1041,15 +1054,15 @@ async def q6_shift_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data == "shift_done":
         if not context.user_data.get("shifts"):
             await q.answer("⚠️ Выберите хотя бы одну смену!", show_alert=True)
-            return Q6_SHIFT
+            return Q7_SHIFT
 
         shifts_str = ", ".join(context.user_data["shifts"])
         await q.edit_message_text(f"🕐 Смены: *{shifts_str}* ✅", parse_mode="Markdown")
         await q.message.reply_text(
-            f"{progress(6)}\n\n*Вопрос 7 из 9:*\nЕсть ли у вас опыт работы оператором/чаттером?\nЕсли да — укажите, сколько по времени:",
+            f"{progress(6)}\n\n*Вопрос 8 из 10:*\nЕсть ли у вас опыт работы оператором/чаттером?\nЕсли да — укажите, сколько по времени:",
             parse_mode="Markdown", reply_markup=cancel_keyboard(),
         )
-        return Q7_EXPERIENCE
+        return Q8_EXPERIENCE
 
     shift = q.data.replace("shift_", "")
     shifts = context.user_data.get("shifts", [])
@@ -1059,7 +1072,7 @@ async def q6_shift_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         shifts.append(shift)
     context.user_data["shifts"] = shifts
     await q.edit_message_reply_markup(reply_markup=shift_keyboard(shifts, open_shifts=open_shifts))
-    return Q6_SHIFT
+    return Q7_SHIFT
 
 
 async def waitlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1078,6 +1091,7 @@ async def waitlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "╚══════════════════════════════╝\n\n"
             f"👤 *Имя:* {d.get('name', '—')}\n"
             f"🎂 *Возраст:* {d.get('age', '—')}\n"
+            f"🌍 *Страна:* {d.get('country', '—')}\n"
             f"🌐 *Английский:* {d.get('english', '—')}\n"
             f"📱 *Платформа:* {d.get('platform', '—')}\n"
             f"🕐 *Смены:* {d.get('shifts', '—')}\n"
@@ -1099,18 +1113,18 @@ async def waitlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def q7_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q8_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
     context.user_data["experience"] = update.message.text
     await update.message.reply_text(
-        f"{progress(7)}\n\n*Вопрос 8 из 9:*\nС какими анкетами работали? Укажите топ и примерный % конверсии.",
+        f"{progress(7)}\n\n*Вопрос 9 из 10:*\nС какими анкетами работали? Укажите топ и примерный % конверсии.",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
-    return Q8_PROFILES
+    return Q9_PROFILES
 
 
-async def q8_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q9_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
@@ -1118,22 +1132,38 @@ async def q8_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"{progress(8)}\n\n"
-        "🔴 *Вопрос 9 из 9 — ВАЖНО:*\n\n"
+        "🔴 *Вопрос 10 из 10:*\n\n"
         "╔══════════════════════════════╗\n"
-        "║  ⚠️  ВЕРИФИКАЦИЯ ЛИЧНОСТИ   ║\n"
+        "║  🪪  ВЕРИФИКАЦИЯ И NDA      ║\n"
         "╚══════════════════════════════╝\n\n"
-        "После успешной тест-смены мы проводим верификацию:\n\n"
-        "🪪 Фото/скан документа\n"
-        "🎥 Короткое видео с документом в руках\n"
-        "📝 Подписание NDA\n\n"
-        "*Вы согласны пройти верификацию после тест-смены?*",
+        "Ты уже почти в команде — осталось разобраться с одним важным моментом. Читай внимательно, это честно 👇\n\n"
+        "📖 *Почему мы вообще это ввели?*\n"
+        "Мы работаем 3+ года. За это время, к сожалению, сталкивались со скамом — "
+        "людьми которые получали доступ к страницам и пропадали. "
+        "Именно поэтому мы были вынуждены ввести верификацию. "
+        "Это не прихоть — это урок, который мы усвоили чтобы защитить и моделей, и команду.\n\n"
+        "🛡 *Зачем это нужно нам?*\n"
+        "Мы работаем со страницами с хорошим топом. "
+        "Это реальные люди, реальные деньги и реальная ответственность. "
+        "Агентство обязано обеспечить моделям безопасность — "
+        "а значит знать каждого, кому даёт доступ к их данным.\n\n"
+        "🙅 *Это не деанон и не слежка*\n"
+        "Нам нужно только одно: подтвердить личность и возраст. "
+        "Фото + имя — всё. Подойдёт *любой действующий документ* где есть эти данные.\n\n"
+        "🔐 *Безопасность твоих документов прописана в договоре.* "
+        "NDA подписывают обе стороны — мы берём на себя такую же ответственность перед тобой. "
+        "Твои данные не передаются третьим лицам и нигде не публикуются.\n\n"
+        "💬 *Есть отзывы от наших сотрудников* — если хочешь познакомиться с командой поближе перед тем как принять решение, спроси HR-менеджера.\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "_Верификация — это не про недоверие к тебе. Это про то, что мы строим команду всерьёз и надолго. 🤝_\n\n"
+        "*Ты готов(-а) пройти верификацию после тест-смены?*",
         parse_mode="Markdown",
         reply_markup=verification_keyboard(),
     )
-    return Q9_VERIFICATION
+    return Q10_VERIFICATION
 
 
-async def q9_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q10_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
@@ -1211,6 +1241,7 @@ async def q9_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "╚══════════════════════════════╝\n\n"
             f"👤 *Имя:* {d.get('name', '—')}\n"
             f"🎂 *Возраст:* {d.get('age', '—')}\n"
+            f"🌍 *Страна:* {d.get('country', '—')}\n"
             f"🌐 *Английский:* {d.get('english', '—')}\n"
             f"📱 *Платформа:* {d.get('platform', '—')}\n"
             f"🕐 *Смены:* {d.get('shifts', '—')}\n"
@@ -1254,15 +1285,16 @@ def main():
         entry_points=[MessageHandler(filters.Regex("^📝 Заполнить анкету$"), handle_menu)],
         states={
             Q1_SOURCE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, q1_source)],
-            Q2_NAME:       [MessageHandler(filters.TEXT & ~filters.COMMAND, q2_name)],
-            Q3_AGE:        [MessageHandler(filters.TEXT & ~filters.COMMAND, q3_age)],
-            Q4_ENGLISH:    [CallbackQueryHandler(q4_english_cb, pattern="^eng_")],
-            Q5_PLATFORM:   [CallbackQueryHandler(q5_platform_cb, pattern="^plat_")],
-            Q6_SHIFT:      [CallbackQueryHandler(q6_shift_cb, pattern="^shift_")],
-            Q7_EXPERIENCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, q7_experience)],
-            Q8_PROFILES:     [MessageHandler(filters.TEXT & ~filters.COMMAND, q8_profiles)],
-            Q9_VERIFICATION: [CallbackQueryHandler(q9_verification_cb, pattern="^verif_")],
-            Q_WAITLIST:      [CallbackQueryHandler(waitlist_cb, pattern="^waitlist_")],
+            Q2_NAME:          [MessageHandler(filters.TEXT & ~filters.COMMAND, q2_name)],
+            Q3_AGE:           [MessageHandler(filters.TEXT & ~filters.COMMAND, q3_age)],
+            Q4_COUNTRY:       [MessageHandler(filters.TEXT & ~filters.COMMAND, q4_country)],
+            Q5_ENGLISH:       [CallbackQueryHandler(q5_english_cb, pattern="^eng_")],
+            Q6_PLATFORM:      [CallbackQueryHandler(q6_platform_cb, pattern="^plat_")],
+            Q7_SHIFT:         [CallbackQueryHandler(q7_shift_cb, pattern="^shift_")],
+            Q8_EXPERIENCE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q8_experience)],
+            Q9_PROFILES:      [MessageHandler(filters.TEXT & ~filters.COMMAND, q9_profiles)],
+            Q10_VERIFICATION: [CallbackQueryHandler(q10_verification_cb, pattern="^verif_")],
+            Q_WAITLIST:       [CallbackQueryHandler(waitlist_cb, pattern="^waitlist_")],
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
