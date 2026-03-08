@@ -710,19 +710,24 @@ async def notify_hr(context: ContextTypes.DEFAULT_TYPE, data: dict):
     if not HR_CHAT_ID:
         logger.warning("HR_CHAT_ID не задан — уведомление не отправлено.")
         return
+
+    def e(val):
+        """Экранирует спецсимволы Markdown в пользовательских данных."""
+        return str(val).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+
     text = (
         "🔔 *Новая заявка AllStars!*\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 *Имя:* {data.get('name', '—')}\n"
-        f"🪪 *TG:* @{data.get('username', '—')} (`{data.get('user_id', '—')}`)\n"
-        f"🎂 *Возраст:* {data.get('age', '—')}\n"
-        f"🌐 *Английский:* {data.get('english', '—')}\n"
-        f"📱 *Платформа:* {data.get('platform', '—')}\n"
-        f"🕐 *Смены:* {data.get('shifts', '—')}\n"
-        f"💼 *Опыт:* {data.get('experience', '—')}\n"
-        f"📊 *Анкеты:* {data.get('profiles', '—')}\n"
-        f"🪪 *Верификация:* {data.get('verification', '—')}\n"
-        f"📡 *Источник:* {data.get('source', '—')}\n"
+        f"👤 *Имя:* {e(data.get('name', '—'))}\n"
+        f"🪪 *TG:* @{e(data.get('username', '—'))} (`{data.get('user_id', '—')}`)\n"
+        f"🎂 *Возраст:* {e(data.get('age', '—'))}\n"
+        f"🌐 *Английский:* {e(data.get('english', '—'))}\n"
+        f"📱 *Платформа:* {e(data.get('platform', '—'))}\n"
+        f"🕐 *Смены:* {e(data.get('shifts', '—'))}\n"
+        f"💼 *Опыт:* {e(data.get('experience', '—'))}\n"
+        f"📊 *Анкеты:* {e(data.get('profiles', '—'))}\n"
+        f"🪪 *Верификация:* {e(data.get('verification', '—'))}\n"
+        f"📡 *Источник:* {e(data.get('source', '—'))}\n"
         f"🕒 *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M')}"
     )
     try:
