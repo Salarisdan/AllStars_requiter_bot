@@ -935,6 +935,67 @@ async def tools_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
+#  HR Invite Callback
+# ─────────────────────────────────────────────
+async def handle_hr_invite_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+
+    await query.answer()
+
+    data = query.data or ""
+    user = query.from_user
+
+    if data.startswith("interview_confirm:"):
+        row_number = data.split(":", 1)[1]
+
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "Отлично! 🙌\n"
+            "Спасибо за подтверждение. Тогда ждём вас в назначенное время 😊"
+        )
+
+        if HR_CHAT_ID:
+            try:
+                await context.bot.send_message(
+                    chat_id=HR_CHAT_ID,
+                    text=(
+                        f"✅ Кандидат подтвердил собеседование\n\n"
+                        f"Пользователь: @{user.username if user.username else 'без username'}\n"
+                        f"TG ID: {user.id}\n"
+                        f"Row: {row_number}"
+                    )
+                )
+            except Exception as e:
+                logger.error(f"HR notify confirm error: {type(e).__name__}: {e}", exc_info=True)
+
+    elif data.startswith("interview_reschedule:"):
+        row_number = data.split(":", 1)[1]
+
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "Хорошо 🙌\n"
+            "Спасибо! Напишите, пожалуйста, в какое время вам было бы удобнее созвониться, "
+            "и HR свяжется с вами."
+        )
+
+        if HR_CHAT_ID:
+            try:
+                await context.bot.send_message(
+                    chat_id=HR_CHAT_ID,
+                    text=(
+                        f"🕒 Кандидату нужно другое время\n\n"
+                        f"Пользователь: @{user.username if user.username else 'без username'}\n"
+                        f"TG ID: {user.id}\n"
+                        f"Row: {row_number}"
+                    )
+                )
+            except Exception as e:
+                logger.error(f"HR notify reschedule error: {type(e).__name__}: {e}", exc_info=True)
+
+
+# ─────────────────────────────────────────────
 #  АНКЕТА
 # ─────────────────────────────────────────────
 async def q1_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1287,6 +1348,7 @@ def main():
     # Inline-кнопки подразделов + навигация «Назад»
     app.add_handler(CallbackQueryHandler(about_callback, pattern="^about_"))
     app.add_handler(CallbackQueryHandler(tools_callback, pattern="^tool_"))
+    app.add_handler(CallbackQueryHandler(handle_hr_invite_callback, pattern=r"^interview_(confirm|reschedule):"))
 
     # Меню
     app.add_handler(MessageHandler(
