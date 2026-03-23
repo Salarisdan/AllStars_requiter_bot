@@ -2,7 +2,8 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -112,6 +113,151 @@ def get_sheet():
     except Exception as e:
         logger.error(f"Failed to connect: {type(e).__name__}: {e}", exc_info=True)
         raise
+
+
+def get_main_worksheet():
+    global _gs_client
+    get_sheet()
+    spreadsheet = _gs_client.open(SPREADSHEET_NAME)
+    return spreadsheet.worksheet("AllStarsLeads")
+
+
+def parse_interview_datetime(date_str: str, time_str: str):
+    """
+    Преобразует:
+    date_str = '23.03.2026'
+    time_str = '16:30'
+    в timezone-aware datetime Europe/Moscow
+    """
+    if not date_str or not time_str:
+        return None
+
+    date_str = str(date_str).strip()
+    time_str = str(time_str).strip()
+
+    try:
+        dt = datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M")
+        return dt.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+    except Exception:
+        return None
+
+
+def has_reminder_marker(comments: str, row_number: int) -> bool:
+    s = str(comments or "")
+    return "[REMINDER_SENT " in s
+
+
+async def interview_reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Каждые 5 минут:
+    - читает AllStarsLeads
+    - ищет статус 'Собеседование'
+    - если до собеса <= 60 минут и > 0 минут
+    - и ещё не отправляли reminder
+    -> шлёт сообщение и ставит маркер в 'Комментарии'
+    """
+    try:
+        ws = get_main_worksheet()
+        rows = ws.get_all_values()
+
+        if not rows or len(rows) < 2:
+            return
+
+        headers = rows[0]
+
+        def col_idx(name: str):
+          try:
+              return headers.index(name)
+          except ValueError:
+              return -1
+
+        idx_username = col_idx("Username")
+        if idx_username == -1:
+            idx_username = col_idx("TG Username")
+
+        idx_user_id = col_idx("ID")
+        if idx_user_id == -1:
+            idx_user_id = col_idx("TG ID")
+
+        idx_name = col_idx("Как вас зовут?")
+        if idx_name == -1:
+            idx_name = col_idx("Имя")
+
+        idx_status = col_idx("Статус")
+        idx_date = col_idx("Дата собеседования")
+        idx_time = col_idx("Время собеседования")
+        idx_comments = col_idx("Комментарии")
+
+        if min(idx_user_id, idx_status, idx_date, idx_time, idx_comments) == -1:
+            logger.error("Reminder job: required columns not found in AllStarsLeads")
+            return
+
+        now_msk = datetime.now(ZoneInfo("Europe/Moscow"))
+
+        for row_number, row in enumerate(rows[1:], start=2):
+            try:
+                # защита от коротких строк
+                def safe_get(idx):
+                    return row[idx] if idx >= 0 and idx < len(row) else ""
+
+                telegram_user_id = str(safe_get(idx_user_id)).strip()
+                candidate_name = str(safe_get(idx_name)).strip()
+                status = str(safe_get(idx_status)).strip()
+                interview_date = str(safe_get(idx_date)).strip()
+                interview_time = str(safe_get(idx_time)).strip()
+                comments = str(safe_get(idx_comments)).strip()
+
+                if not telegram_user_id:
+                    continue
+
+                if status != "Собеседование":
+                    continue
+
+                if not interview_date or not interview_time:
+                    continue
+
+                if has_reminder_marker(comments, row_number):
+                    continue
+
+                interview_dt = parse_interview_datetime(interview_date, interview_time)
+                if not interview_dt:
+                    continue
+
+                diff = interview_dt - now_msk
+                minutes_left = diff.total_seconds() / 60
+
+                # Напоминаем за 60 минут до начала, но не после старта
+                if not (0 <= minutes_left <= 60):
+                    continue
+
+                text = (
+                    f"Привет! 🙌\n\n"
+                    f"Напоминаем, что у вас сегодня собеседование с Allstars\n"
+                    f"в {interview_time} по мск.\n\n"
+                    f"Будем ждать 😊"
+                )
+
+                await context.bot.send_message(
+                    chat_id=int(telegram_user_id),
+                    text=text
+                )
+
+                marker = f"[REMINDER_SENT {now_msk.strftime('%Y-%m-%d %H:%M')}]"
+                new_comments = f"{comments}\n{marker}".strip() if comments else marker
+
+                # Комментарии у тебя в колонке Q
+                ws.update_acell(f"Q{row_number}", new_comments)
+
+                logger.info(
+                    f"Reminder sent to user_id={telegram_user_id}, row={row_number}, "
+                    f"candidate={candidate_name}, interview={interview_date} {interview_time}"
+                )
+
+            except Exception as row_err:
+                logger.error(f"Reminder row error #{row_number}: {type(row_err).__name__}: {row_err}", exc_info=True)
+
+    except Exception as e:
+        logger.error(f"Reminder job failed: {type(e).__name__}: {e}", exc_info=True)
 
 
 def get_rejections_sheet():
@@ -1320,6 +1466,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
+
+    app.job_queue.run_repeating(
+        interview_reminder_job,
+        interval=300,   # каждые 5 минут
+        first=20
+    )
 
     conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^📝 Заполнить анкету$"), handle_menu)],
