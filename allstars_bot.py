@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 #  КОНФИГ
 # ─────────────────────────────────────────────
 BOT_TOKEN        = os.getenv("BOT_TOKEN", "8326443265:AAFAC5HFM_Bubhqya0xImJAkdvwt3LQdyXI")
-HR_CHAT_ID       = 8658951963
+HR_CHAT_ID = 8658951963
 BOT_USERNAME     = os.getenv("BOT_USERNAME", "allstars_hr_bot")
 BANNER_GDRIVE_ID = "1-15wE_zOrskUqb5sClN4hTS_Bi91AlwE"
 
@@ -66,6 +66,13 @@ _tg_file_cache: dict[str, str] = {}  # key → tg file_id
 
 GOOGLE_CREDS = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
 SPREADSHEET_NAME = os.environ.get("GOOGLE_SPREADSHEET_NAME", "AllStarsLeads")
+MAIN_WORKSHEET_TITLE = os.environ.get("GOOGLE_MAIN_WORKSHEET_NAME", "AllStarsLeads")
+MAIN_HEADERS = [
+    "Дата", "TG Username", "TG ID",
+    "Источник", "Имя", "Возраст",
+    "Английский", "Платформа", "Смены",
+    "Опыт", "Анкеты", "Верификация",
+]
 
 # ─────────────────────────────────────────────
 #  СОСТОЯНИЯ ДИАЛОГА
@@ -99,16 +106,22 @@ def get_sheet():
         creds      = Credentials.from_service_account_info(GOOGLE_CREDS, scopes=scopes)
         _gs_client = gspread.authorize(creds)
         logger.info("Authorized successfully, opening spreadsheet...")
-        _gs_sheet  = _gs_client.open(SPREADSHEET_NAME).sheet1
+        spreadsheet = _gs_client.open(SPREADSHEET_NAME)
+        try:
+            _gs_sheet = spreadsheet.worksheet(MAIN_WORKSHEET_TITLE)
+        except Exception:
+            _gs_sheet = spreadsheet.add_worksheet(
+                title=MAIN_WORKSHEET_TITLE,
+                rows=1000,
+                cols=max(len(MAIN_HEADERS), 12),
+            )
         logger.info("Spreadsheet opened successfully!")
 
+        if _gs_sheet.col_count < len(MAIN_HEADERS):
+            _gs_sheet.add_cols(len(MAIN_HEADERS) - _gs_sheet.col_count)
+
         if not _gs_sheet.row_values(1):
-            _gs_sheet.append_row([
-                "Дата", "TG Username", "TG ID",
-                "Источник", "Имя", "Возраст",
-                "Английский", "Платформа", "Смены",
-                "Опыт", "Анкеты", "Верификация",
-            ])
+            _gs_sheet.append_row(MAIN_HEADERS)
         return _gs_sheet
     except Exception as e:
         logger.error(f"Failed to connect: {type(e).__name__}: {e}", exc_info=True)
@@ -116,10 +129,7 @@ def get_sheet():
 
 
 def get_main_worksheet():
-    global _gs_client
-    get_sheet()
-    spreadsheet = _gs_client.open(SPREADSHEET_NAME)
-    return spreadsheet.worksheet("AllStarsLeads")
+    return get_sheet()
 
 
 def parse_interview_datetime(date_str: str, time_str: str):
@@ -283,23 +293,32 @@ def get_rejections_sheet():
 
 
 def save_to_sheet(data: dict) -> bool:
-    try:
-        logger.info("Saving to Google Sheets...")
-        sheet = get_sheet()
-        sheet.append_row([
-            datetime.now().strftime("%d.%m.%Y %H:%M"),
-            data.get("username", ""), data.get("user_id", ""),
-            data.get("source", ""),   data.get("name", ""),
-            data.get("age", ""),      data.get("english", ""),
-            data.get("platform", ""), data.get("shifts", ""),
-            data.get("experience", ""), data.get("profiles", ""),
-            data.get("verification", ""),
-        ])
-        logger.info("Saved to Google Sheets successfully!")
-        return True
-    except Exception as e:
-        logger.error(f"Sheets error: {type(e).__name__}: {e}", exc_info=True)
-        return False
+    global _gs_client, _gs_sheet
+    row = [
+        datetime.now().strftime("%d.%m.%Y %H:%M"),
+        data.get("username", ""), data.get("user_id", ""),
+        data.get("source", ""),   data.get("name", ""),
+        data.get("age", ""),      data.get("english", ""),
+        data.get("platform", ""), data.get("shifts", ""),
+        data.get("experience", ""), data.get("profiles", ""),
+        data.get("verification", ""),
+    ]
+
+    for attempt in (1, 2):
+        try:
+            logger.info(f"Saving to Google Sheets (attempt {attempt})...")
+            sheet = get_sheet()
+            if sheet.col_count < len(row):
+                sheet.add_cols(len(row) - sheet.col_count)
+            sheet.append_row(row)
+            logger.info("Saved to Google Sheets successfully!")
+            return True
+        except Exception as e:
+            logger.error(f"Sheets error (attempt {attempt}): {type(e).__name__}: {e}", exc_info=True)
+            _gs_client = None
+            _gs_sheet = None
+
+    return False
 
 
 def save_rejection(data: dict) -> bool:
@@ -1512,7 +1531,7 @@ def main():
     ))
 
     logger.info("🚀 AllStars Bot started!")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
