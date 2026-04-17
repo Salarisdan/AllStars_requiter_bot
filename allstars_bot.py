@@ -12,6 +12,7 @@ from telegram.ext import (
     ConversationHandler, filters, ContextTypes
 )
 import gspread
+from gspread.exceptions import SpreadsheetNotFound
 from google.oauth2.service_account import Credentials
 
 # ─────────────────────────────────────────────
@@ -85,6 +86,7 @@ def load_google_creds() -> dict:
 
 GOOGLE_CREDS = load_google_creds()
 SPREADSHEET_NAME = os.environ.get("GOOGLE_SPREADSHEET_NAME", "AllStarsLeads")
+SPREADSHEET_ID = os.environ.get("GOOGLE_SPREADSHEET_ID", "").strip()
 MAIN_WORKSHEET_TITLE = os.environ.get("GOOGLE_MAIN_WORKSHEET_NAME", "AllStarsLeads")
 MAIN_HEADERS = [
     "Дата", "TG Username", "TG ID",
@@ -104,6 +106,40 @@ Q1_SOURCE, Q2_NAME, Q3_AGE, Q5_ENGLISH, Q6_PLATFORM, Q7_SHIFT, Q8_EXPERIENCE, Q9
 _gs_client = None
 _gs_sheet  = None
 _gs_rejections = None  # Лист с отказами от верификации
+
+
+def _extract_spreadsheet_id(value: str) -> str:
+    """Extract spreadsheet id from plain id or full Google Sheets URL."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    marker = "/spreadsheets/d/"
+    if marker in raw:
+        tail = raw.split(marker, 1)[1]
+        return tail.split("/", 1)[0].split("?", 1)[0]
+    return raw
+
+
+def open_spreadsheet(client: gspread.Client):
+    """Open spreadsheet by explicit id first, then fallback to title/key in SPREADSHEET_NAME."""
+    if SPREADSHEET_ID:
+        return client.open_by_key(_extract_spreadsheet_id(SPREADSHEET_ID))
+
+    name_or_id = SPREADSHEET_NAME.strip()
+    possible_id = _extract_spreadsheet_id(name_or_id)
+
+    if "/spreadsheets/d/" in name_or_id:
+        return client.open_by_key(possible_id)
+
+    try:
+        return client.open(name_or_id)
+    except SpreadsheetNotFound:
+        # If title lookup failed, try treating the same value as spreadsheet id.
+        if possible_id and possible_id != name_or_id:
+            return client.open_by_key(possible_id)
+        if possible_id and len(possible_id) >= 30 and " " not in possible_id:
+            return client.open_by_key(possible_id)
+        raise
 
 def get_sheet():
     global _gs_client, _gs_sheet
@@ -125,7 +161,7 @@ def get_sheet():
         creds      = Credentials.from_service_account_info(GOOGLE_CREDS, scopes=scopes)
         _gs_client = gspread.authorize(creds)
         logger.info("Authorized successfully, opening spreadsheet...")
-        spreadsheet = _gs_client.open(SPREADSHEET_NAME)
+        spreadsheet = open_spreadsheet(_gs_client)
         try:
             _gs_sheet = spreadsheet.worksheet(MAIN_WORKSHEET_TITLE)
         except Exception:
@@ -153,6 +189,16 @@ def get_sheet():
         if not _gs_sheet.row_values(1):
             _gs_sheet.append_row(MAIN_HEADERS)
         return _gs_sheet
+    except SpreadsheetNotFound as e:
+        sa_email = GOOGLE_CREDS.get("client_email", "unknown")
+        logger.error(
+            "Spreadsheet not found/access denied. "
+            f"GOOGLE_SPREADSHEET_NAME='{SPREADSHEET_NAME}', GOOGLE_SPREADSHEET_ID='{SPREADSHEET_ID}', "
+            f"service_account='{sa_email}'. "
+            "Share the target sheet with this service account or set GOOGLE_SPREADSHEET_ID.",
+            exc_info=True,
+        )
+        raise
     except Exception as e:
         logger.error(f"Failed to connect: {type(e).__name__}: {e}", exc_info=True)
         raise
