@@ -110,15 +110,26 @@ def get_sheet():
         try:
             _gs_sheet = spreadsheet.worksheet(MAIN_WORKSHEET_TITLE)
         except Exception:
-            _gs_sheet = spreadsheet.add_worksheet(
-                title=MAIN_WORKSHEET_TITLE,
-                rows=1000,
-                cols=max(len(MAIN_HEADERS), 12),
-            )
+            try:
+                _gs_sheet = spreadsheet.sheet1
+                logger.warning(
+                    f"Worksheet '{MAIN_WORKSHEET_TITLE}' not found. Falling back to sheet1: '{_gs_sheet.title}'"
+                )
+            except Exception:
+                _gs_sheet = spreadsheet.add_worksheet(
+                    title=MAIN_WORKSHEET_TITLE,
+                    rows=1000,
+                    cols=max(len(MAIN_HEADERS), 12),
+                )
         logger.info("Spreadsheet opened successfully!")
 
         if _gs_sheet.col_count < len(MAIN_HEADERS):
-            _gs_sheet.add_cols(len(MAIN_HEADERS) - _gs_sheet.col_count)
+            try:
+                _gs_sheet.add_cols(len(MAIN_HEADERS) - _gs_sheet.col_count)
+            except Exception as col_err:
+                logger.warning(
+                    f"Could not extend worksheet columns: {type(col_err).__name__}: {col_err}"
+                )
 
         if not _gs_sheet.row_values(1):
             _gs_sheet.append_row(MAIN_HEADERS)
@@ -309,7 +320,12 @@ def save_to_sheet(data: dict) -> bool:
             logger.info(f"Saving to Google Sheets (attempt {attempt})...")
             sheet = get_sheet()
             if sheet.col_count < len(row):
-                sheet.add_cols(len(row) - sheet.col_count)
+                try:
+                    sheet.add_cols(len(row) - sheet.col_count)
+                except Exception as col_err:
+                    logger.warning(
+                        f"Could not extend worksheet columns before append: {type(col_err).__name__}: {col_err}"
+                    )
             sheet.append_row(row)
             logger.info("Saved to Google Sheets successfully!")
             return True
