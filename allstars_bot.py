@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -64,7 +65,25 @@ SECTION_IMAGES = {
 # Кэш TG file_id — после первой загрузки не обращаемся к Drive повторно
 _tg_file_cache: dict[str, str] = {}  # key → tg file_id
 
-GOOGLE_CREDS = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+def load_google_creds() -> dict:
+    """Load service account JSON from env, handling escaped newlines/base64 payloads."""
+    raw = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"].strip()
+
+    try:
+        creds = json.loads(raw)
+    except json.JSONDecodeError:
+        # Some platforms store secrets as base64 to avoid escaping issues.
+        decoded = base64.b64decode(raw).decode("utf-8")
+        creds = json.loads(decoded)
+
+    private_key = creds.get("private_key")
+    if isinstance(private_key, str):
+        creds["private_key"] = private_key.replace("\\n", "\n").strip()
+
+    return creds
+
+
+GOOGLE_CREDS = load_google_creds()
 SPREADSHEET_NAME = os.environ.get("GOOGLE_SPREADSHEET_NAME", "AllStarsLeads")
 MAIN_WORKSHEET_TITLE = os.environ.get("GOOGLE_MAIN_WORKSHEET_NAME", "AllStarsLeads")
 MAIN_HEADERS = [
