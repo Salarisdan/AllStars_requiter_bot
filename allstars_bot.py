@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 #  КОНФИГ
 # ─────────────────────────────────────────────
 BOT_TOKEN        = os.getenv("BOT_TOKEN", "8326443265:AAFAC5HFM_Bubhqya0xImJAkdvwt3LQdyXI")
-HR_CHAT_ID = 8658951963
+HR_CHAT_ID = 863939675
 BOT_USERNAME     = os.getenv("BOT_USERNAME", "allstars_hr_bot")
 BANNER_GDRIVE_ID = "1-15wE_zOrskUqb5sClN4hTS_Bi91AlwE"
 
