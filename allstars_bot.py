@@ -102,7 +102,7 @@ MAIN_HEADERS = [
 # ─────────────────────────────────────────────
 #  СОСТОЯНИЯ ДИАЛОГА
 # ─────────────────────────────────────────────
-Q_DUPLICATE, Q1_SOURCE, Q2_NAME, Q3_AGE, Q5_ENGLISH, Q6_PLATFORM, Q7_SHIFT, Q8_EXPERIENCE, Q9_TOP_PAGES, Q10_CONVERSION, Q11_MODEL_TYPES, Q12_WORKED_PLATFORMS, Q13_FINANCIAL, Q14_GMAIL, Q15_AVG_CHECK, Q16_MAIN_ACTIVITY, Q17_SCHEDULE, Q18_VERIFICATION, Q_WAITLIST = range(19)
+Q_DUPLICATE, Q1_SOURCE, Q2_NAME, Q3_AGE, Q5_ENGLISH, Q6_PLATFORM, Q7_SHIFT, Q8_EXPERIENCE, Q9_TOP_PAGES, Q10_CONVERSION, Q11_MODEL_TYPES, Q12_WORKED_PLATFORMS, Q13_FINANCIAL, Q14_GMAIL, Q15_AVG_CHECK, Q16_MAIN_ACTIVITY, Q16B_ACTIVITY_DETAIL, Q17_SCHEDULE, Q18_VERIFICATION, Q_WAITLIST = range(20)
 
 # ─────────────────────────────────────────────
 #  GOOGLE SHEETS — кэшированный клиент
@@ -513,8 +513,6 @@ def save_waitlist(data: dict) -> bool:
 def source_keyboard():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("👥 От друга/реферала"), KeyboardButton("📢 Telegram-канал")],
-            [KeyboardButton("🎯 Реклама"), KeyboardButton("✍️ Другое")],
             [KeyboardButton("❌ Отменить заполнение")],
         ],
         resize_keyboard=True,
@@ -1267,7 +1265,8 @@ async def start_form_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=(
             f"{question_header(0, 17)}"
             "*Вопрос 1 из 17:*\n"
-            "Откуда вы о нас узнали?"
+            "Откуда вы о нас узнали?\n\n"
+            "_Напишите своими словами: например, «от друга @username», «реклама в Telegram», «сам нашёл» и т.д._"
         ),
         parse_mode="Markdown",
         reply_markup=source_keyboard(),
@@ -1556,20 +1555,7 @@ async def q1_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
-    text = update.message.text.strip()
-    if context.user_data.get("awaiting_custom_source"):
-        context.user_data["source"] = text
-        context.user_data.pop("awaiting_custom_source", None)
-    elif text == "✍️ Другое":
-        context.user_data["awaiting_custom_source"] = True
-        await update.message.reply_text(
-            "Напишите, пожалуйста, откуда вы о нас узнали:",
-            reply_markup=cancel_keyboard(),
-        )
-        return Q1_SOURCE
-    else:
-        context.user_data["source"] = text
-
+    context.user_data["source"] = update.message.text.strip()
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q2_NAME")
     await update.message.reply_text(
         f"{question_header(1, 17)}*Вопрос 2 из 17:*\nКак вас зовут?",
@@ -1761,7 +1747,12 @@ async def q9_top_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q10_CONVERSION")
 
     await update.message.reply_text(
-        f"{question_header(8, 17)}*Вопрос 9 из 17:*\nКакую конверсию вы обычно показывали?",
+        f"{question_header(8, 17)}*Вопрос 9 из 17:*\n"
+        "Какую конверсию вы обычно показывали?\n\n"
+        "💡 *Конверсия* — это процент фанов, которые купили что-то у модели, от всех, "
+        "с кем вы общались за смену.\n"
+        "Например: если за смену вы написали 50 фанам, и 10 из них купили PPV или кастом — конверсия 20%.\n\n"
+        "_Если не считали точно — напишите примерно или напишите «не считал(а)»._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
@@ -1821,40 +1812,18 @@ async def q13_financial(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await cancel(update, context)
 
     context.user_data["financial_expectations"] = update.message.text
-    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q14_GMAIL")
-
-    await update.message.reply_text(
-        f"{question_header(12, 17)}*Вопрос 13 из 17:*\n"
-        "Напишите, пожалуйста, ваш Gmail для отправки обучающего гайда:",
-        parse_mode="Markdown",
-        reply_markup=cancel_keyboard(),
-    )
-    return Q14_GMAIL
-
-
-async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text == "❌ Отменить заполнение":
-        return await cancel(update, context)
-
-    email = update.message.text.strip().lower()
-    if not is_valid_gmail(email):
-        await update.message.reply_text(
-            "Укажите корректный Gmail в формате `example@gmail.com`.",
-            parse_mode="Markdown",
-            reply_markup=cancel_keyboard(),
-        )
-        return Q14_GMAIL
-
-    context.user_data["email"] = email
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q15_AVG_CHECK")
 
     await update.message.reply_text(
-        f"{question_header(13, 17)}*Вопрос 14 из 17:*\n"
-        "Какой средний чек на анкетах, с которыми вы работали?",
+        f"{question_header(12, 17)}*Вопрос 13 из 17:*\n"
+        "Какой средний чек вы делали за смену?",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
     return Q15_AVG_CHECK
+
+
+
 
 
 async def q15_avg_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1865,7 +1834,7 @@ async def q15_avg_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q16_MAIN_ACTIVITY")
 
     await update.message.reply_text(
-        f"{question_header(14, 17)}*Вопрос 15 из 17:*\n"
+        f"{question_header(13, 17)}*Вопрос 14 из 17:*\n"
         "Есть ли у вас основная деятельность или учеба?",
         parse_mode="Markdown",
         reply_markup=main_activity_keyboard(),
@@ -1877,11 +1846,64 @@ async def q16_main_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
-    context.user_data["main_activity"] = update.message.text.strip()
-    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q17_SCHEDULE")
+    choice = update.message.text.strip()
+    context.user_data["main_activity"] = choice
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q16B_ACTIVITY_DETAIL")
 
+    if choice == "Да, учеба":
+        await update.message.reply_text(
+            "На кого вы учитесь? Напишите специальность или направление:",
+            reply_markup=cancel_keyboard(),
+        )
+        context.user_data["activity_detail_type"] = "study"
+        return Q16B_ACTIVITY_DETAIL
+
+    elif choice == "Да, работа":
+        await update.message.reply_text(
+            "Работа — это хорошо! 👍\n"
+            "Главное, чтобы она не мешала вам работать с нами.\n\n"
+            "Опишите, пожалуйста: кем вы работаете и сколько времени в день тратите на работу?",
+            reply_markup=cancel_keyboard(),
+        )
+        context.user_data["activity_detail_type"] = "work"
+        return Q16B_ACTIVITY_DETAIL
+
+    elif choice == "И работа, и учеба":
+        await update.message.reply_text(
+            "Понял(а)! Расскажите подробнее:\n"
+            "• На кого учитесь?\n"
+            "• Кем работаете и сколько времени тратите на работу?\n\n"
+            "_Напишите всё в одном сообщении._",
+            parse_mode="Markdown",
+            reply_markup=cancel_keyboard(),
+        )
+        context.user_data["activity_detail_type"] = "both"
+        return Q16B_ACTIVITY_DETAIL
+
+    else:
+        # Нет — сразу к графику
+        set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q17_SCHEDULE")
+        await update.message.reply_text(
+            f"{question_header(14, 17)}*Вопрос 15 из 17:*\n"
+            "Какой график вам подходит: 5/2 или 6/1?",
+            parse_mode="Markdown",
+            reply_markup=schedule_keyboard(),
+        )
+        return Q17_SCHEDULE
+
+
+async def q16b_activity_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отменить заполнение":
+        return await cancel(update, context)
+
+    detail = update.message.text.strip()
+    detail_type = context.user_data.pop("activity_detail_type", "")
+    existing = context.user_data.get("main_activity", "")
+    context.user_data["main_activity"] = f"{existing} — {detail}"
+
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q17_SCHEDULE")
     await update.message.reply_text(
-        f"{question_header(15, 17)}*Вопрос 16 из 17:*\n"
+        f"{question_header(14, 17)}*Вопрос 15 из 17:*\n"
         "Какой график вам подходит: 5/2 или 6/1?",
         parse_mode="Markdown",
         reply_markup=schedule_keyboard(),
@@ -1902,8 +1924,19 @@ async def q17_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return Q17_SCHEDULE
 
     context.user_data["work_schedule"] = schedule
-    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q18_VERIFICATION")
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q14_GMAIL")
 
+    await update.message.reply_text(
+        f"{question_header(15, 17)}*Вопрос 16 из 17:*\n"
+        "Напишите, пожалуйста, ваш Gmail — HR отправит на него обучающий гайд:",
+        parse_mode="Markdown",
+        reply_markup=cancel_keyboard(),
+    )
+    return Q14_GMAIL
+
+
+async def _q17_verification_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет финальный вопрос про верификацию."""
     await update.message.reply_text(
         f"{question_header(16, 17)}*Вопрос 17 из 17:*\n\n"
         "*Верификация и NDA (кратко):*\n"
@@ -1915,6 +1948,24 @@ async def q17_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=verification_keyboard(),
     )
+
+
+async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отменить заполнение":
+        return await cancel(update, context)
+
+    email = update.message.text.strip().lower()
+    if not is_valid_gmail(email):
+        await update.message.reply_text(
+            "Укажите корректный Gmail в формате `example@gmail.com`.",
+            parse_mode="Markdown",
+            reply_markup=cancel_keyboard(),
+        )
+        return Q14_GMAIL
+
+    context.user_data["email"] = email
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q18_VERIFICATION")
+    await _q17_verification_question(update, context)
     return Q18_VERIFICATION
 
 
@@ -2137,6 +2188,7 @@ def main():
             Q14_GMAIL:        [MessageHandler(filters.TEXT & ~filters.COMMAND, q14_gmail)],
             Q15_AVG_CHECK:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q15_avg_check)],
             Q16_MAIN_ACTIVITY:[MessageHandler(filters.TEXT & ~filters.COMMAND, q16_main_activity)],
+            Q16B_ACTIVITY_DETAIL:[MessageHandler(filters.TEXT & ~filters.COMMAND, q16b_activity_detail)],
             Q17_SCHEDULE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, q17_schedule)],
             Q18_VERIFICATION: [CallbackQueryHandler(q18_verification_cb, pattern="^(verif_|nda_more)")],
             Q_WAITLIST:       [CallbackQueryHandler(waitlist_cb, pattern="^waitlist_")],
