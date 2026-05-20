@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
@@ -92,15 +93,16 @@ MAIN_HEADERS = [
     "Дата", "TG Username", "TG ID",
     "Источник", "Имя", "Возраст",
     "Английский", "Платформа", "Смены",
-    "Опыт", "Анкеты", "Ср чек",
+    "Стаж", "Топ страниц", "Конверсия", "Типаж моделей", "Платформы (опыт)", "Ср чек",
     "Основная деятельность/учеба", "График",
-    "Финансовые ожидания", "Опыт/платформы", "Gmail", "Верификация",
+    "Финансовые ожидания", "Gmail", "Верификация",
+    "Скрининг", "Автотег",
 ]
 
 # ─────────────────────────────────────────────
 #  СОСТОЯНИЯ ДИАЛОГА
 # ─────────────────────────────────────────────
-Q1_SOURCE, Q2_NAME, Q3_AGE, Q5_ENGLISH, Q6_PLATFORM, Q7_SHIFT, Q8_EXPERIENCE, Q9_PROFILES, Q10_FINANCIAL, Q11_EXPERIENCE_PLATFORMS, Q12_GMAIL, Q13_AVG_CHECK, Q14_MAIN_ACTIVITY, Q15_SCHEDULE, Q16_VERIFICATION, Q_WAITLIST = range(16)
+Q_DUPLICATE, Q1_SOURCE, Q2_NAME, Q3_AGE, Q5_ENGLISH, Q6_PLATFORM, Q7_SHIFT, Q8_EXPERIENCE, Q9_TOP_PAGES, Q10_CONVERSION, Q11_MODEL_TYPES, Q12_WORKED_PLATFORMS, Q13_FINANCIAL, Q14_GMAIL, Q15_AVG_CHECK, Q16_MAIN_ACTIVITY, Q17_SCHEDULE, Q18_VERIFICATION, Q_WAITLIST = range(19)
 
 # ─────────────────────────────────────────────
 #  GOOGLE SHEETS — кэшированный клиент
@@ -378,14 +380,16 @@ def save_to_sheet(data: dict) -> bool:
         data.get("source", ""),   data.get("name", ""),
         data.get("age", ""),      data.get("english", ""),
         data.get("platform", ""), data.get("shifts", ""),
-        data.get("experience", ""), data.get("profiles", ""),
+        data.get("experience", ""), data.get("top_pages", ""), data.get("conversion", ""),
+        data.get("model_types", ""), data.get("worked_platforms", ""),
         data.get("avg_check", ""),
         data.get("main_activity", ""),
         data.get("work_schedule", ""),
         data.get("financial_expectations", ""),
-        data.get("experience_platforms", ""),
         data.get("email", ""),
         data.get("verification", ""),
+        data.get("screening", ""),
+        data.get("auto_tag", ""),
     ]
 
     for attempt in (1, 2):
@@ -399,7 +403,15 @@ def save_to_sheet(data: dict) -> bool:
                     logger.warning(
                         f"Could not extend worksheet columns before append: {type(col_err).__name__}: {col_err}"
                     )
-            sheet.append_row(row)
+
+            update_row = data.get("update_row_number")
+            if update_row:
+                start_col = "A"
+                end_col = chr(ord("A") + len(row) - 1)
+                sheet.update(f"{start_col}{update_row}:{end_col}{update_row}", [row])
+                logger.info(f"Updated existing candidate row #{update_row}")
+            else:
+                sheet.append_row(row)
             logger.info("Saved to Google Sheets successfully!")
             return True
         except Exception as e:
@@ -443,9 +455,9 @@ def get_waitlist_sheet():
                 "Дата", "TG Username", "TG ID",
                 "Откуда узнали", "Имя", "Возраст",
                 "Английский", "Платформа", "Смена",
-                "Опыт", "Анкеты (топ, %)", "Ср чек",
+                "Стаж", "Топ страниц", "Конверсия", "Типаж моделей", "Платформы (опыт)", "Ср чек",
                 "Основная деятельность/учеба", "График",
-                "Финансовые ожидания", "Опыт/платформы", "Gmail", "Верификация",
+                "Финансовые ожидания", "Gmail", "Верификация", "Скрининг", "Автотег",
             ])
             return sheet
     except Exception as e:
@@ -468,14 +480,18 @@ def save_waitlist(data: dict) -> bool:
             data.get("platform", ""),
             data.get("shifts", ""),
             data.get("experience", ""),
-            data.get("profiles", ""),
+            data.get("top_pages", ""),
+            data.get("conversion", ""),
+            data.get("model_types", ""),
+            data.get("worked_platforms", ""),
             data.get("avg_check", ""),
             data.get("main_activity", ""),
             data.get("work_schedule", ""),
             data.get("financial_expectations", ""),
-            data.get("experience_platforms", ""),
             data.get("email", ""),
             data.get("verification", ""),
+            data.get("screening", ""),
+            data.get("auto_tag", ""),
         ]
 
         if sheet.col_count < len(row):
@@ -492,6 +508,188 @@ def save_waitlist(data: dict) -> bool:
     except Exception as e:
         logger.error(f"Waitlist save error: {type(e).__name__}: {e}", exc_info=True)
         return False
+
+
+def source_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("👥 От друга/реферала"), KeyboardButton("📢 Telegram-канал")],
+            [KeyboardButton("🎯 Реклама"), KeyboardButton("✍️ Другое")],
+            [KeyboardButton("❌ Отменить заполнение")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def main_activity_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("Да, работа"), KeyboardButton("Да, учеба")],
+            [KeyboardButton("И работа, и учеба"), KeyboardButton("Нет")],
+            [KeyboardButton("❌ Отменить заполнение")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def estimate_minutes_left(step: int, total: int) -> int:
+    remaining_steps = max(total - step, 0)
+    return max(1, min(4, (remaining_steps + 3) // 4))
+
+
+def question_header(step: int, total: int = 17) -> str:
+    return f"{progress(step, total)}\n⏱ Осталось ~{estimate_minutes_left(step, total)} минуты\n\n"
+
+
+def _reminder_job_name(user_id: int, suffix: str) -> str:
+    return f"form_reminder:{user_id}:{suffix}"
+
+
+def cancel_form_reminders(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    if not context.job_queue:
+        return
+    for suffix in ("2h", "24h"):
+        for job in context.job_queue.get_jobs_by_name(_reminder_job_name(user_id, suffix)):
+            job.schedule_removal()
+
+
+def schedule_form_reminders(context: ContextTypes.DEFAULT_TYPE, user_id: int, chat_id: int):
+    if not context.job_queue:
+        return
+    cancel_form_reminders(context, user_id)
+
+    context.job_queue.run_once(
+        form_reminder_2h_job,
+        when=timedelta(hours=2),
+        data={"chat_id": chat_id, "user_id": user_id},
+        name=_reminder_job_name(user_id, "2h"),
+    )
+    context.job_queue.run_once(
+        form_reminder_24h_job,
+        when=timedelta(hours=24),
+        data={"chat_id": chat_id, "user_id": user_id},
+        name=_reminder_job_name(user_id, "24h"),
+    )
+
+
+def set_form_step(context: ContextTypes.DEFAULT_TYPE, user_id: int, chat_id: int, step: str):
+    context.user_data["current_step"] = step
+    context.user_data["form_active"] = True
+    schedule_form_reminders(context, user_id, chat_id)
+
+
+def track_dropoff(context: ContextTypes.DEFAULT_TYPE, reason: str):
+    stats = context.application.bot_data.setdefault("dropoff_stats", {})
+    stats[reason] = stats.get(reason, 0) + 1
+    logger.info(f"Dropoff tracked: {reason}; stats={stats}")
+
+
+async def form_reminder_2h_job(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data or {}
+    user_id = data.get("user_id")
+    chat_id = data.get("chat_id")
+    if not chat_id or not user_id:
+        return
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "Привет! Напоминаем про анкету в Allstars 🙌\n\n"
+            "Ты остановился(ась) на середине заполнения."
+            " Вернуться можно в любой момент через кнопку «📝 Заполнить анкету»."
+        ),
+        reply_markup=main_keyboard(),
+    )
+
+
+async def form_reminder_24h_job(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data or {}
+    user_id = data.get("user_id")
+    chat_id = data.get("chat_id")
+    if not chat_id or not user_id:
+        return
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "Всё ещё ждем твою анкету 💫\n\n"
+            "Если актуально, просто нажми «📝 Заполнить анкету» и продолжим."
+        ),
+        reply_markup=main_keyboard(),
+    )
+
+
+def find_existing_application_row(user_id: int) -> int | None:
+    try:
+        sheet = get_sheet()
+        rows = sheet.get_all_values()
+        if not rows:
+            return None
+
+        headers = rows[0]
+        idx_tg_id = headers.index("TG ID") if "TG ID" in headers else -1
+        if idx_tg_id == -1:
+            return None
+
+        for row_num, row in enumerate(rows[1:], start=2):
+            if idx_tg_id < len(row) and str(row[idx_tg_id]).strip() == str(user_id):
+                return row_num
+    except Exception as e:
+        logger.error(f"Duplicate check failed: {type(e).__name__}: {e}")
+    return None
+
+
+def is_valid_gmail(email: str) -> bool:
+    email = (email or "").strip().lower()
+    return bool(re.fullmatch(r"[a-z0-9._%+-]+@gmail\.com", email))
+
+
+def _parse_number(text: str) -> float | None:
+    m = re.search(r"(\d+(?:[\.,]\d+)?)", text or "")
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def score_candidate(data: dict) -> tuple[str, str]:
+    score = 0
+    eng_map = {"A1": 0, "A2": 1, "B1": 2, "B2": 3, "C1C2": 4}
+    eng = data.get("english", "")
+    score += eng_map.get(eng, 0)
+
+    exp_num = _parse_number(data.get("experience", "") or "") or 0
+    score += 3 if exp_num >= 6 else 2 if exp_num >= 3 else 1 if exp_num > 0 else 0
+
+    platform = data.get("platform", "")
+    score += 2 if platform == "Обе платформы" else 1 if platform else 0
+
+    shifts = [s.strip() for s in str(data.get("shifts", "")).split(",") if s.strip()]
+    score += 2 if len(shifts) >= 2 else 1 if len(shifts) == 1 else 0
+
+    fin = _parse_number(data.get("financial_expectations", "") or "")
+    if fin is not None:
+        score += 2 if fin <= 2000 else 1
+
+    if score >= 10:
+        screening = "A"
+    elif score >= 6:
+        screening = "B"
+    else:
+        screening = "C"
+
+    if screening == "A":
+        tag = "Strong"
+    elif screening == "C" and exp_num == 0:
+        tag = "Junior"
+    elif screening == "B":
+        tag = "New"
+    else:
+        tag = "Needs Review"
+
+    return screening, tag
 
 
 # ─────────────────────────────────────────────
@@ -893,6 +1091,7 @@ def shift_keyboard(selected=None, open_shifts=None):
 
 def verification_keyboard():
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📖 Показать подробнее", callback_data="nda_more")],
         [InlineKeyboardButton("✅ Да, согласен(а)", callback_data="verif_yes")],
         [InlineKeyboardButton("❌ Нет, не готов(а)", callback_data="verif_no")],
     ])
@@ -910,7 +1109,7 @@ def schedule_keyboard():
 # ─────────────────────────────────────────────
 #  ПРОГРЕСС-БАР
 # ─────────────────────────────────────────────
-def progress(step: int, total: int = 15) -> str:
+def progress(step: int, total: int = 17) -> str:
     if step == total:
         return "🏆" * total + f"  {step}/{total}"
     filled = "🟩" * step
@@ -989,19 +1188,23 @@ async def notify_hr(context: ContextTypes.DEFAULT_TYPE, data: dict):
 
     text = (
         "🔔 *Новая заявка AllStars!*\n\n"
+        f"*Скрининг:* {e(data.get('screening', '—'))}\n"
+        f"*Автотег:* {e(data.get('auto_tag', '—'))}\n\n"
         f"*Платформа:* {e(data.get('platform', '—'))}\n"
         f"*Имя:* {e(data.get('name', '—'))}\n"
         f"*Тг:* @{e(data.get('username', '—'))} ({e(data.get('user_id', '—'))})\n"
         f"*Возраст:* {e(data.get('age', '—'))}\n"
-        f"*Опыт:* {e(data.get('experience', '—'))}\n"
-        f"*Топ страниц:* {e(data.get('profiles', '—'))}\n"
+        f"*Стаж:* {e(data.get('experience', '—'))}\n"
+        f"*Топ страниц:* {e(data.get('top_pages', '—'))}\n"
+        f"*Конверсия:* {e(data.get('conversion', '—'))}\n"
+        f"*Типаж моделей:* {e(data.get('model_types', '—'))}\n"
+        f"*Платформы (опыт):* {e(data.get('worked_platforms', '—'))}\n"
         f"*Ср чек:* {e(data.get('avg_check', '—'))}\n"
         f"*Смена:* {e(data.get('shifts', '—'))}\n"
         f"*Откуда вы о нас узнали:* {e(data.get('source', '—'))}\n"
         f"*Есть ли основная деятельность/учеба:* {e(data.get('main_activity', '—'))}\n\n"
         f"*График 5/2 или 6/1:* {e(data.get('work_schedule', '—'))}\n\n"
         f"*Финансовые ожидания:* {e(data.get('financial_expectations', '—'))}\n\n"
-        f"*Опыт / платформы:* {e(data.get('experience_platforms', '—'))}\n\n"
         f"*Mail:* {e(data.get('email', '—'))}"
     )
     try:
@@ -1047,30 +1250,48 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def start_form_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q1_SOURCE")
+    await send_section_photo(
+        update,
+        gdrive_id=SECTION_IMAGES["form"],
+        cache_key="form",
+        caption=(
+            "📋 *Анкета Allstars*\n\n"
+            "17 вопросов · ~4 минуты\n\n"
+            "_Нажми кнопку ниже, чтобы начать 👇_"
+        ),
+    )
+    await asyncio.sleep(0.4)
+    await update.effective_chat.send_message(
+        text=(
+            f"{question_header(0, 17)}"
+            "*Вопрос 1 из 17:*\n"
+            "Откуда вы о нас узнали?"
+        ),
+        parse_mode="Markdown",
+        reply_markup=source_keyboard(),
+    )
+    return Q1_SOURCE
+
+
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     if text == "📝 Заполнить анкету":
-        # Фото → потом вопросы
-        await send_section_photo(
-            update,
-            gdrive_id=SECTION_IMAGES["form"],
-            cache_key="form",
-            caption=(
-                "📋 *Анкета Allstars*\n\n"
-                "15 вопросов · ~4 минуты\n\n"
-                "_Нажми кнопку ниже, чтобы начать 👇_"
-            ),
-        )
-        await asyncio.sleep(0.4)
-        await update.message.reply_text(
-            f"{progress(0)}\n\n"
-            "*Вопрос 1 из 15:*\n"
-            "Откуда вы о нас узнали? Напишите имя/ник в TG друга или другой источник:",
-            parse_mode="Markdown",
-            reply_markup=cancel_keyboard(),
-        )
-        return Q1_SOURCE
+        existing_row = find_existing_application_row(update.effective_user.id)
+        if existing_row:
+            context.user_data["duplicate_row"] = existing_row
+            await update.message.reply_text(
+                "Мы уже видим вашу предыдущую заявку. Обновить ее новыми данными?",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("♻️ Да, обновить", callback_data="dup_update_yes")],
+                    [InlineKeyboardButton("🆕 Нет, создать новую", callback_data="dup_update_no")],
+                ]),
+            )
+            return Q_DUPLICATE
+
+        return await start_form_flow(update, context)
 
     elif text == "🏢 Об агентстве":
         await send_section_photo(
@@ -1102,10 +1323,10 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await typing(update, delay=0.6)
         await update.message.reply_text(
             "📘 *Гайд агентства Allstars*\n\n"
-            "🚫 *ВНИМАНИЕ: ДОСТУП ЗАКРЫТ ДО ОДОБРЕНИЯ HR*\n"
-            "Ссылки откроются только после двух шагов:\n"
-            "1) Вы заполнили анкету в боте\n"
-            "2) HR написал вам лично и выдал доступ\n\n"
+            "Почему доступ закрыт:\n"
+            "1) Материалы доступны только кандидатам после проверки\n"
+            "2) Доступ выдает HR после заполнения анкеты\n\n"
+            "✅ Уже 120+ кандидатов прошли этот этап и получили доступ к гайдам.\n\n"
             "Если открыть ссылки сейчас - Notion покажет отказ в доступе.\n\n"
             "Подтвердите, что вы понимаете это условие, и только после этого откроются ссылки.",
             parse_mode="Markdown",
@@ -1141,8 +1362,17 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update,
             gdrive_id=SECTION_IMAGES["nda"],
             cache_key="nda",
-            caption=NDA_TEXT,
-            reply_markup=main_keyboard(),
+            caption=(
+                "📋 *NDA и верификация — кратко*\n\n"
+                "• Документы запрашиваем только после тест-смены\n"
+                "• Это стандарт безопасности для защиты моделей и команды\n"
+                "• Данные не передаются третьим лицам\n\n"
+                "Нажмите «Показать подробнее», если хотите полный регламент."
+            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📖 Показать подробнее", callback_data="nda_menu_more")],
+                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="guide_back_menu")],
+            ]),
         )
 
     elif text == "❓ FAQ":
@@ -1173,6 +1403,28 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif text == "❌ Отменить заполнение":
         return await cancel(update, context)
+
+
+async def duplicate_decision_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    if q.data == "dup_update_yes":
+        context.user_data["update_row_number"] = context.user_data.get("duplicate_row")
+        await q.edit_message_reply_markup(reply_markup=None)
+        await q.message.reply_text("Отлично, обновим вашу предыдущую заявку новыми данными.")
+    else:
+        context.user_data.pop("update_row_number", None)
+        await q.edit_message_reply_markup(reply_markup=None)
+        await q.message.reply_text("Ок, создадим новую заявку.")
+
+    return await start_form_flow(update, context)
+
+
+async def nda_menu_more_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.message.reply_text(NDA_TEXT, parse_mode="Markdown", reply_markup=main_keyboard())
 
 
 # ─────────────────────────────────────────────
@@ -1303,9 +1555,24 @@ async def handle_hr_invite_callback(update: Update, context: ContextTypes.DEFAUL
 async def q1_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
-    context.user_data["source"] = update.message.text
+
+    text = update.message.text.strip()
+    if context.user_data.get("awaiting_custom_source"):
+        context.user_data["source"] = text
+        context.user_data.pop("awaiting_custom_source", None)
+    elif text == "✍️ Другое":
+        context.user_data["awaiting_custom_source"] = True
+        await update.message.reply_text(
+            "Напишите, пожалуйста, откуда вы о нас узнали:",
+            reply_markup=cancel_keyboard(),
+        )
+        return Q1_SOURCE
+    else:
+        context.user_data["source"] = text
+
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q2_NAME")
     await update.message.reply_text(
-        f"{progress(1, 15)}\n\n*Вопрос 2 из 15:*\nКак вас зовут?",
+        f"{question_header(1, 17)}*Вопрос 2 из 17:*\nКак вас зовут?",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
     return Q2_NAME
@@ -1315,8 +1582,9 @@ async def q2_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
     context.user_data["name"] = update.message.text
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q3_AGE")
     await update.message.reply_text(
-        f"{progress(2, 15)}\n\n*Вопрос 3 из 15:*\nСколько вам лет?",
+        f"{question_header(2, 17)}*Вопрос 3 из 17:*\nСколько вам лет?",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
     return Q3_AGE
@@ -1343,8 +1611,9 @@ async def q3_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Пожалуйста, введите реальный возраст:", parse_mode="Markdown")
         return Q3_AGE
     context.user_data["age"] = str(age)
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q5_ENGLISH")
     await update.message.reply_text(
-        f"{progress(3, 15)}\n\n*Вопрос 4 из 15:*\nКакой у вас уровень английского языка?",
+        f"{question_header(3, 17)}*Вопрос 4 из 17:*\nКакой у вас уровень английского языка?",
         parse_mode="Markdown", reply_markup=english_keyboard(),
     )
     return Q5_ENGLISH
@@ -1356,8 +1625,9 @@ async def q5_english_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     level = q.data.replace("eng_", "")
     context.user_data["english"] = level
     await q.edit_message_text(f"🌐 Английский: *{level}* ✅", parse_mode="Markdown")
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q6_PLATFORM")
     await q.message.reply_text(
-        f"{progress(4, 15)}\n\n*Вопрос 5 из 15:*\nКакая платформа вас интересует?",
+        f"{question_header(4, 17)}*Вопрос 5 из 17:*\nКакая платформа вас интересует?",
         parse_mode="Markdown", reply_markup=platform_keyboard(),
     )
     return Q6_PLATFORM
@@ -1380,8 +1650,9 @@ async def q6_platform_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     open_list = " · ".join(shift_names[s] for s in open_shifts) if open_shifts else "нет открытых смен"
 
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q7_SHIFT")
     await q.message.reply_text(
-        f"{progress(5, 15)}\n\n*Вопрос 6 из 15:*\nКакая смена вам подходит?\n\n"
+        f"{question_header(5, 17)}*Вопрос 6 из 17:*\nКакая смена вам подходит?\n\n"
         f"🟢 *Сейчас открыт набор ({platform}):* {open_list}\n\n"
         "_Можно выбрать несколько, затем нажмите «Подтвердить»._",
         parse_mode="Markdown",
@@ -1402,8 +1673,9 @@ async def q7_shift_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         shifts_str = ", ".join(context.user_data["shifts"])
         await q.edit_message_text(f"🕐 Смены: *{shifts_str}* ✅", parse_mode="Markdown")
+        set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q8_EXPERIENCE")
         await q.message.reply_text(
-            f"{progress(6, 15)}\n\n*Вопрос 7 из 15:*\nЕсть ли у вас опыт работы оператором/чаттером?\nЕсли да — укажите, сколько по времени:",
+            f"{question_header(6, 17)}*Вопрос 7 из 17:*\nКакой у вас стаж работы оператором/чаттером?\n(например: 6 месяцев / 1 год)",
             parse_mode="Markdown", reply_markup=cancel_keyboard(),
         )
         return Q8_EXPERIENCE
@@ -1425,6 +1697,8 @@ async def waitlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if q.data == "waitlist_yes":
         save_waitlist(context.user_data)
+        cancel_form_reminders(context, update.effective_user.id)
+        context.user_data["form_active"] = False
         await q.edit_message_reply_markup(reply_markup=None)
         await q.message.chat.send_action(ChatAction.TYPING)
         await asyncio.sleep(1.0)
@@ -1438,13 +1712,15 @@ async def waitlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🌐 *Английский:* {d.get('english', '—')}\n"
             f"📱 *Платформа:* {d.get('platform', '—')}\n"
             f"🕐 *Смены:* {d.get('shifts', '—')}\n"
-            f"💼 *Опыт:* {d.get('experience', '—')}\n"
-            f"📊 *Анкеты:* {d.get('profiles', '—')}\n"
+            f"💼 *Стаж:* {d.get('experience', '—')}\n"
+            f"📊 *Топ страниц:* {d.get('top_pages', '—')}\n"
+            f"📈 *Конверсия:* {d.get('conversion', '—')}\n"
+            f"👤 *Типаж моделей:* {d.get('model_types', '—')}\n"
+            f"🌐 *Платформы (опыт):* {d.get('worked_platforms', '—')}\n"
             f"💵 *Ср чек:* {d.get('avg_check', '—')}\n"
             f"📚 *Основная деятельность/учеба:* {d.get('main_activity', '—')}\n"
             f"📅 *График:* {d.get('work_schedule', '—')}\n"
             f"💸 *Финансовые ожидания:* {d.get('financial_expectations', '—')}\n"
-            f"🌐 *Опыт / платформы:* {d.get('experience_platforms', '—')}\n"
             f"✉️ *Mail:* {d.get('email', '—')}\n"
             f"🪪 *Верификация:* {d.get('verification', '—')}\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1454,6 +1730,9 @@ async def waitlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await q.message.reply_text(card, parse_mode="Markdown", reply_markup=main_keyboard())
     else:
+        track_dropoff(context, "waitlist_declined")
+        cancel_form_reminders(context, update.effective_user.id)
+        context.user_data["form_active"] = False
         await q.edit_message_reply_markup(reply_markup=None)
         await q.message.reply_text(
             "Понял! Если передумаешь — возвращайся, мы всегда рады. 👋",
@@ -1466,156 +1745,201 @@ async def q8_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
     context.user_data["experience"] = update.message.text
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q9_TOP_PAGES")
     await update.message.reply_text(
-        f"{progress(7, 15)}\n\n*Вопрос 8 из 15:*\nС какими анкетами работали? Укажите топ и примерный % конверсии.",
+        f"{question_header(7, 17)}*Вопрос 8 из 17:*\nС каким топом страниц вы работали?",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
-    return Q9_PROFILES
+    return Q9_TOP_PAGES
 
 
-async def q9_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q9_top_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
-    context.user_data["profiles"] = update.message.text
+    context.user_data["top_pages"] = update.message.text
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q10_CONVERSION")
 
     await update.message.reply_text(
-        f"{progress(8, 15)}\n\n"
-        "*Вопрос 9 из 15:*\n"
+        f"{question_header(8, 17)}*Вопрос 9 из 17:*\nКакую конверсию вы обычно показывали?",
+        parse_mode="Markdown",
+        reply_markup=cancel_keyboard(),
+    )
+    return Q10_CONVERSION
+
+
+async def q10_conversion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отменить заполнение":
+        return await cancel(update, context)
+
+    context.user_data["conversion"] = update.message.text
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q11_MODEL_TYPES")
+
+    await update.message.reply_text(
+        f"{question_header(9, 17)}*Вопрос 10 из 17:*\n"
+        "С каким типажом моделей работали?",
+        parse_mode="Markdown",
+        reply_markup=cancel_keyboard(),
+    )
+    return Q11_MODEL_TYPES
+
+
+async def q11_model_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отменить заполнение":
+        return await cancel(update, context)
+
+    context.user_data["model_types"] = update.message.text
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q12_WORKED_PLATFORMS")
+
+    await update.message.reply_text(
+        f"{question_header(10, 17)}*Вопрос 11 из 17:*\n"
+        "На каких платформах у вас уже был практический опыт?",
+        parse_mode="Markdown",
+        reply_markup=cancel_keyboard(),
+    )
+    return Q12_WORKED_PLATFORMS
+
+
+async def q12_worked_platforms(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "❌ Отменить заполнение":
+        return await cancel(update, context)
+
+    context.user_data["worked_platforms"] = update.message.text
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q13_FINANCIAL")
+
+    await update.message.reply_text(
+        f"{question_header(11, 17)}*Вопрос 12 из 17:*\n"
         "Какой уровень дохода рассматриваешь на старте и через 3 месяца?",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
-    return Q10_FINANCIAL
+    return Q13_FINANCIAL
 
 
-async def q10_financial(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q13_financial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
     context.user_data["financial_expectations"] = update.message.text
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q14_GMAIL")
 
     await update.message.reply_text(
-        f"{progress(9, 15)}\n\n"
-        "*Вопрос 10 из 15:*\n"
-        "Расскажи кратко, где работал(а), с каким типажом моделей и на каких платформах?",
+        f"{question_header(12, 17)}*Вопрос 13 из 17:*\n"
+        "Напишите, пожалуйста, ваш Gmail для отправки обучающего гайда:",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
-    return Q11_EXPERIENCE_PLATFORMS
+    return Q14_GMAIL
 
 
-async def q11_experience_platforms(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
-    context.user_data["experience_platforms"] = update.message.text
+    email = update.message.text.strip().lower()
+    if not is_valid_gmail(email):
+        await update.message.reply_text(
+            "Укажите корректный Gmail в формате `example@gmail.com`.",
+            parse_mode="Markdown",
+            reply_markup=cancel_keyboard(),
+        )
+        return Q14_GMAIL
+
+    context.user_data["email"] = email
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q15_AVG_CHECK")
 
     await update.message.reply_text(
-        f"{progress(10, 15)}\n\n"
-        "*Вопрос 11 из 15:*\n"
-        "Напишите, пожалуйста, свой Gmail, чтобы наш HR выдал вам обучающий гайд:",
-        parse_mode="Markdown",
-        reply_markup=cancel_keyboard(),
-    )
-    return Q12_GMAIL
-
-
-async def q12_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text == "❌ Отменить заполнение":
-        return await cancel(update, context)
-
-    context.user_data["email"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        f"{progress(11, 15)}\n\n"
-        "*Вопрос 12 из 15:*\n"
+        f"{question_header(13, 17)}*Вопрос 14 из 17:*\n"
         "Какой средний чек на анкетах, с которыми вы работали?",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
-    return Q13_AVG_CHECK
+    return Q15_AVG_CHECK
 
 
-async def q13_avg_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q15_avg_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
     context.user_data["avg_check"] = update.message.text.strip()
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q16_MAIN_ACTIVITY")
 
     await update.message.reply_text(
-        f"{progress(12, 15)}\n\n"
-        "*Вопрос 13 из 15:*\n"
+        f"{question_header(14, 17)}*Вопрос 15 из 17:*\n"
         "Есть ли у вас основная деятельность или учеба?",
         parse_mode="Markdown",
-        reply_markup=cancel_keyboard(),
+        reply_markup=main_activity_keyboard(),
     )
-    return Q14_MAIN_ACTIVITY
+    return Q16_MAIN_ACTIVITY
 
 
-async def q14_main_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q16_main_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
     context.user_data["main_activity"] = update.message.text.strip()
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q17_SCHEDULE")
 
     await update.message.reply_text(
-        f"{progress(13, 15)}\n\n"
-        "*Вопрос 14 из 15:*\n"
+        f"{question_header(15, 17)}*Вопрос 16 из 17:*\n"
         "Какой график вам подходит: 5/2 или 6/1?",
         parse_mode="Markdown",
         reply_markup=schedule_keyboard(),
     )
-    return Q15_SCHEDULE
+    return Q17_SCHEDULE
 
 
-async def q15_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q17_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
-    context.user_data["work_schedule"] = update.message.text.strip()
+    schedule = update.message.text.strip()
+    if schedule not in {"5/2", "6/1"}:
+        await update.message.reply_text(
+            "Пожалуйста, выберите только один из вариантов: 5/2 или 6/1.",
+            reply_markup=schedule_keyboard(),
+        )
+        return Q17_SCHEDULE
+
+    context.user_data["work_schedule"] = schedule
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q18_VERIFICATION")
 
     await update.message.reply_text(
-        f"{progress(14, 15)}\n\n"
-        "*Вопрос 15 из 15:*\n\n"
-        "╔══════════════════════════════╗\n"
-        "║  🪪  ВЕРИФИКАЦИЯ И NDA      ║\n"
-        "╚══════════════════════════════╝\n\n"
-        "Ты уже почти в команде — осталось разобраться с одним важным моментом. Читай внимательно, это честно 👇\n\n"
-        "📖 *Почему мы вообще это ввели?*\n"
-        "Мы работаем 3+ года. За это время, к сожалению, сталкивались со скамом — "
-        "людьми которые получали доступ к страницам и пропадали. "
-        "Именно поэтому мы были вынуждены ввести верификацию. "
-        "Это не прихоть — это урок, который мы усвоили чтобы защитить и моделей, и команду.\n\n"
-        "🛡 *Зачем это нужно нам?*\n"
-        "Мы работаем со страницами с хорошим топом. "
-        "Это реальные люди, реальные деньги и реальная ответственность. "
-        "Агентство обязано обеспечить моделям безопасность — "
-        "а значит знать каждого, кому даёт доступ к их данным.\n\n"
-        "🙅 *Это не деанон и не слежка*\n"
-        "Нам нужно только одно: подтвердить личность и возраст. "
-        "Фото + имя — всё. Подойдёт *любой действующий документ* где есть эти данные.\n\n"
-        "🔐 *Безопасность твоих документов прописана в договоре.* "
-        "NDA подписывают обе стороны — мы берём на себя такую же ответственность перед тобой. "
-        "Твои данные не передаются третьим лицам и нигде не публикуются.\n\n"
-        "💬 *Есть отзывы от наших сотрудников* — если хочешь познакомиться с командой поближе перед тем как принять решение, спроси HR-менеджера.\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "_Верификация — это не про недоверие к тебе. Это про то, что мы строим команду всерьёз и надолго. 🤝_\n\n"
-        "*Ты готов(-а) пройти верификацию после тест-смены?*",
+        f"{question_header(16, 17)}*Вопрос 17 из 17:*\n\n"
+        "*Верификация и NDA (кратко):*\n"
+        "• Документы только после тест-смены\n"
+        "• Данные защищены NDA\n"
+        "• Нужно для безопасности команды и моделей\n\n"
+        "Нажмите «Показать подробнее», если хотите полную версию.\n\n"
+        "*Готовы пройти верификацию после тест-смены?*",
         parse_mode="Markdown",
         reply_markup=verification_keyboard(),
     )
-    return Q16_VERIFICATION
+    return Q18_VERIFICATION
 
 
-async def q10_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+
+    if q.data == "nda_more":
+        await q.message.reply_text(
+            "📖 *Подробно про верификацию и NDA:*\n\n"
+            "1) Верификация только после тест-смены\n"
+            "2) Подходит паспорт/ID/права/ВНЖ\n"
+            "3) Данные не публикуются и защищены договором\n"
+            "4) Это обязательный стандарт безопасности в агентстве",
+            parse_mode="Markdown",
+        )
+        return Q18_VERIFICATION
 
     if q.data == "verif_no":
         await q.edit_message_text("🪪 Верификация: *❌ Нет*", parse_mode="Markdown")
         context.user_data["user_id"]  = update.effective_user.id
         context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
+        track_dropoff(context, f"verification_declined_at_{context.user_data.get('current_step', 'unknown')}")
+        cancel_form_reminders(context, update.effective_user.id)
+        context.user_data["form_active"] = False
         save_rejection(context.user_data)
         await q.message.chat.send_action(ChatAction.TYPING)
         await asyncio.sleep(1.2)
@@ -1638,6 +1962,9 @@ async def q10_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["user_id"]      = update.effective_user.id
     context.user_data["username"]     = update.effective_user.username or update.effective_user.full_name
     context.user_data["shifts"]       = ", ".join(context.user_data.get("shifts", []))
+    context.user_data["screening"], context.user_data["auto_tag"] = score_candidate(context.user_data)
+    cancel_form_reminders(context, update.effective_user.id)
+    context.user_data["form_active"] = False
 
     await q.edit_message_text("🪪 Верификация: *✅ Да*", parse_mode="Markdown")
 
@@ -1680,7 +2007,7 @@ async def q10_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         await notify_hr(context, context.user_data)
         d = context.user_data
         card = (
-            f"{progress(15, 15)}\n\n"
+            f"{progress(17, 17)}\n\n"
             "╔══════════════════════════════╗\n"
             "║     ✅  АНКЕТА ОТПРАВЛЕНА!  ║\n"
             "╚══════════════════════════════╝\n\n"
@@ -1689,17 +2016,25 @@ async def q10_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"🌐 *Английский:* {d.get('english', '—')}\n"
             f"📱 *Платформа:* {d.get('platform', '—')}\n"
             f"🕐 *Смены:* {d.get('shifts', '—')}\n"
-            f"💼 *Опыт:* {d.get('experience', '—')}\n"
-            f"📊 *Анкеты:* {d.get('profiles', '—')}\n"
+            f"🎯 *Скрининг:* {d.get('screening', '—')}\n"
+            f"🏷 *Автотег:* {d.get('auto_tag', '—')}\n"
+            f"💼 *Стаж:* {d.get('experience', '—')}\n"
+            f"📊 *Топ страниц:* {d.get('top_pages', '—')}\n"
+            f"📈 *Конверсия:* {d.get('conversion', '—')}\n"
+            f"👤 *Типаж моделей:* {d.get('model_types', '—')}\n"
+            f"🌐 *Платформы (опыт):* {d.get('worked_platforms', '—')}\n"
             f"💵 *Ср чек:* {d.get('avg_check', '—')}\n"
             f"📚 *Основная деятельность/учеба:* {d.get('main_activity', '—')}\n"
             f"📅 *График:* {d.get('work_schedule', '—')}\n"
             f"💸 *Финансовые ожидания:* {d.get('financial_expectations', '—')}\n"
-            f"🌐 *Опыт / платформы:* {d.get('experience_platforms', '—')}\n"
             f"✉️ *Mail:* {d.get('email', '—')}\n"
             f"🪪 *Верификация:* {d.get('verification', '—')}\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🎉 Отлично! Наш HR-менеджер свяжется с тобой в ближайшее время для согласования даты созвона.\n\n"
+            "1) Проверка анкеты\n"
+            "2) Контакт HR\n"
+            "3) Тест-смена\n\n"
+            "⏱ HR пишет обычно в течение *1 часа*.\n\n"
+            "*FAQ кратко:* выплаты - каждый вторник, NDA обязателен, верификация после тест-смены.\n\n"
             "_Пока ждёшь — изучи раздел «🏢 Об агентстве» и «💰 Условия работы» 👇_"
         )
         await q.message.chat.send_action(ChatAction.TYPING)
@@ -1721,26 +2056,7 @@ async def guide_apply_now_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     context.user_data.clear()
     await q.edit_message_reply_markup(reply_markup=None)
-
-    await send_section_photo(
-        update,
-        gdrive_id=SECTION_IMAGES["form"],
-        cache_key="form",
-        caption=(
-            "📋 *Анкета Allstars*\n\n"
-            "15 вопросов · ~4 минуты\n\n"
-            "_Нажми кнопку ниже, чтобы начать 👇_"
-        ),
-    )
-    await asyncio.sleep(0.4)
-    await q.message.reply_text(
-        f"{progress(0)}\n\n"
-        "*Вопрос 1 из 15:*\n"
-        "Откуда вы о нас узнали? Напишите имя/ник в TG друга или другой источник:",
-        parse_mode="Markdown",
-        reply_markup=cancel_keyboard(),
-    )
-    return Q1_SOURCE
+    return await start_form_flow(update, context)
 
 
 async def guide_ack_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1775,6 +2091,9 @@ async def guide_back_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    step = context.user_data.get("current_step", "unknown")
+    track_dropoff(context, f"cancel_at_{step}")
+    cancel_form_reminders(context, update.effective_user.id)
     context.user_data.clear()
     await update.message.reply_text(
         "❌ *Заполнение анкеты отменено.*\n\nВы можете вернуться в любое время — нажмите «📝 Заполнить анкету».",
@@ -1802,6 +2121,7 @@ def main():
             CallbackQueryHandler(guide_apply_now_cb, pattern="^guide_apply_now$"),
         ],
         states={
+            Q_DUPLICATE: [CallbackQueryHandler(duplicate_decision_cb, pattern="^dup_update_")],
             Q1_SOURCE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, q1_source)],
             Q2_NAME:          [MessageHandler(filters.TEXT & ~filters.COMMAND, q2_name)],
             Q3_AGE:           [MessageHandler(filters.TEXT & ~filters.COMMAND, q3_age)],
@@ -1809,14 +2129,16 @@ def main():
             Q6_PLATFORM:      [CallbackQueryHandler(q6_platform_cb, pattern="^plat_")],
             Q7_SHIFT:         [CallbackQueryHandler(q7_shift_cb, pattern="^shift_")],
             Q8_EXPERIENCE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q8_experience)],
-            Q9_PROFILES:      [MessageHandler(filters.TEXT & ~filters.COMMAND, q9_profiles)],
-            Q10_FINANCIAL:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q10_financial)],
-            Q11_EXPERIENCE_PLATFORMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, q11_experience_platforms)],
-            Q12_GMAIL:        [MessageHandler(filters.TEXT & ~filters.COMMAND, q12_gmail)],
-            Q13_AVG_CHECK:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q13_avg_check)],
-            Q14_MAIN_ACTIVITY:[MessageHandler(filters.TEXT & ~filters.COMMAND, q14_main_activity)],
-            Q15_SCHEDULE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, q15_schedule)],
-            Q16_VERIFICATION: [CallbackQueryHandler(q10_verification_cb, pattern="^verif_")],
+            Q9_TOP_PAGES:      [MessageHandler(filters.TEXT & ~filters.COMMAND, q9_top_pages)],
+            Q10_CONVERSION:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q10_conversion)],
+            Q11_MODEL_TYPES: [MessageHandler(filters.TEXT & ~filters.COMMAND, q11_model_types)],
+            Q12_WORKED_PLATFORMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, q12_worked_platforms)],
+            Q13_FINANCIAL:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q13_financial)],
+            Q14_GMAIL:        [MessageHandler(filters.TEXT & ~filters.COMMAND, q14_gmail)],
+            Q15_AVG_CHECK:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q15_avg_check)],
+            Q16_MAIN_ACTIVITY:[MessageHandler(filters.TEXT & ~filters.COMMAND, q16_main_activity)],
+            Q17_SCHEDULE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, q17_schedule)],
+            Q18_VERIFICATION: [CallbackQueryHandler(q18_verification_cb, pattern="^(verif_|nda_more)")],
             Q_WAITLIST:       [CallbackQueryHandler(waitlist_cb, pattern="^waitlist_")],
         },
         fallbacks=[
@@ -1832,6 +2154,7 @@ def main():
     # Inline-кнопки подразделов + навигация «Назад»
     app.add_handler(CallbackQueryHandler(about_callback, pattern="^about_"))
     app.add_handler(CallbackQueryHandler(tools_callback, pattern="^tool_"))
+    app.add_handler(CallbackQueryHandler(nda_menu_more_cb, pattern="^nda_menu_more$"))
     app.add_handler(CallbackQueryHandler(guide_ack_cb, pattern="^guide_ack$"))
     app.add_handler(CallbackQueryHandler(guide_back_menu_cb, pattern="^guide_back_menu$"))
     app.add_handler(CallbackQueryHandler(handle_hr_invite_callback, pattern=r"^interview_(confirm|reschedule):"))
