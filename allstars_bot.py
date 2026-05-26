@@ -92,12 +92,12 @@ MAIN_WORKSHEET_TITLE = os.environ.get("GOOGLE_MAIN_WORKSHEET_NAME", "AllStarsLea
 MAIN_HEADERS = [
     "Дата", "TG Username", "TG ID",
     "Источник", "Имя", "Возраст",
-    "Психология: реакция на фидбек",
-    "Психология: реакция на слабый результат",
-    "Психология: ответственность за KPI",
-    "Психология: границы коммуникации",
-    "Психология: конфликт с руководителем",
-    "Психология: самоконтроль в стрессе",
+    "Психология: самый классный рабочий день",
+    "Психология: мечта",
+    "Психология: какой крутой ТимЛид",
+    "Психология: резерв 4",
+    "Психология: резерв 5",
+    "Психология: резерв 6",
     "Английский", "Платформа", "Смены",
     "Стаж", "Топ страниц", "Конверсия", "Типаж моделей", "Платформы (опыт)", "Ср чек",
     "Основная деятельность/учеба", "График",
@@ -467,12 +467,12 @@ def get_waitlist_sheet():
             sheet.append_row([
                 "Дата", "TG Username", "TG ID",
                 "Откуда узнали", "Имя", "Возраст",
-                "Психология: реакция на фидбек",
-                "Психология: реакция на слабый результат",
-                "Психология: ответственность за KPI",
-                "Психология: границы коммуникации",
-                "Психология: конфликт с руководителем",
-                "Психология: самоконтроль в стрессе",
+                "Психология: самый классный рабочий день",
+                "Психология: мечта",
+                "Психология: какой крутой ТимЛид",
+                "Психология: резерв 4",
+                "Психология: резерв 5",
+                "Психология: резерв 6",
                 "Английский", "Платформа", "Смена",
                 "Стаж", "Топ страниц", "Конверсия", "Типаж моделей", "Платформы (опыт)", "Ср чек",
                 "Основная деятельность/учеба", "График",
@@ -560,7 +560,7 @@ def estimate_minutes_left(step: int, total: int) -> int:
     return max(1, min(4, (remaining_steps + 3) // 4))
 
 
-FORM_TOTAL_QUESTIONS = 23
+FORM_TOTAL_QUESTIONS = 20
 MIN_PSYCH_ANSWER_LEN = 50
 
 
@@ -1237,18 +1237,12 @@ async def notify_hr(context: ContextTypes.DEFAULT_TYPE, data: dict):
         f"*Смена:* {e(data.get('shifts', '—'))}\n"
         f"*Откуда вы о нас узнали:* {e(data.get('source', '—'))}\n"
         "\n*Психо-блок (вопрос -> ответ):*\n"
-        f"1) Если вы получили неприятную обратную связь от руководителя, что делаете в первую очередь?\n"
+        f"1) Расскажи о твоем самом классном рабочем дне в адалте?\n"
         f"   Ответ: {e(data.get('psych_feedback', '—'))}\n"
-        f"2) Если результат смены ниже ожиданий, какой ваш рабочий алгоритм?\n"
+        f"2) О чем ты мечтаешь?\n"
         f"   Ответ: {e(data.get('psych_low_result', '—'))}\n"
-        f"3) Если вы понимаете, что не выполняете обещанный KPI/план, что делаете?\n"
+        f"3) Что для вас крутой ТимЛид?\n"
         f"   Ответ: {e(data.get('psych_kpi_fail', '—'))}\n"
-        f"4) Что для вас недопустимо в рабочей коммуникации?\n"
-        f"   Ответ: {e(data.get('psych_boundaries', '—'))}\n"
-        f"5) Как вы действуете в конфликте с решением руководителя?\n"
-        f"   Ответ: {e(data.get('psych_conflict', '—'))}\n"
-        f"6) Если чувствуете сильное эмоциональное напряжение в смене, что делаете?\n"
-        f"   Ответ: {e(data.get('psych_stress_control', '—'))}\n"
         "\n"
         f"*Есть ли основная деятельность/учеба:* {e(data.get('main_activity', '—'))}\n\n"
         f"*График 5/2 или 6/1:* {e(data.get('work_schedule', '—'))}\n\n"
@@ -1306,7 +1300,7 @@ async def start_form_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cache_key="form",
         caption=(
             "📋 *Анкета Allstars*\n\n"
-            "23 вопроса · ~6 минут\n\n"
+            "20 вопросов · ~5 минут\n\n"
             "_Нажми кнопку ниже, чтобы начать 👇_"
         ),
     )
@@ -1314,7 +1308,7 @@ async def start_form_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_message(
         text=(
             f"{question_header(0, FORM_TOTAL_QUESTIONS)}"
-            "*Вопрос 1 из 23:*\n"
+            "*Вопрос 1 из 20:*\n"
             "*Верификация и NDA (кратко):*\n"
             "• Документы только после тест-смены\n"
             "• Данные защищены NDA\n"
@@ -1613,7 +1607,7 @@ async def q1_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["source"] = update.message.text.strip()
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q2_NAME")
     await update.message.reply_text(
-        f"{question_header(2, FORM_TOTAL_QUESTIONS)}*Вопрос 3 из 23:*\nКак вас зовут?",
+        f"{question_header(2, FORM_TOTAL_QUESTIONS)}*Вопрос 3 из 20:*\nКак вас зовут?",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
     return Q2_NAME
@@ -1625,7 +1619,7 @@ async def q2_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q3_AGE")
     await update.message.reply_text(
-        f"{question_header(3, FORM_TOTAL_QUESTIONS)}*Вопрос 4 из 23:*\nСколько вам лет?",
+        f"{question_header(3, FORM_TOTAL_QUESTIONS)}*Вопрос 4 из 20:*\nСколько вам лет?",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
     return Q3_AGE
@@ -1654,8 +1648,8 @@ async def q3_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["age"] = str(age)
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q4_FEEDBACK")
     await update.message.reply_text(
-        f"{question_header(4, FORM_TOTAL_QUESTIONS)}*Вопрос 5 из 23:*\n"
-        "Если вы получили неприятную обратную связь от руководителя, что делаете в первую очередь?\n\n"
+        f"{question_header(4, FORM_TOTAL_QUESTIONS)}*Вопрос 5 из 20:*\n"
+        "Расскажи о твоем самом классном рабочем дне в адалте?\n\n"
         "_Ответ должен быть развернутым: минимум 50 символов._",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
@@ -1677,8 +1671,8 @@ async def q4_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["psych_feedback"] = answer
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q4_LOW_RESULT")
     await update.message.reply_text(
-        f"{question_header(5, FORM_TOTAL_QUESTIONS)}*Вопрос 6 из 23:*\n"
-        "Если результат смены ниже ожиданий, какой ваш рабочий алгоритм?\n\n"
+        f"{question_header(5, FORM_TOTAL_QUESTIONS)}*Вопрос 6 из 20:*\n"
+        "О чем ты мечтаешь?\n\n"
         "_Ответ должен быть развернутым: минимум 50 символов._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -1701,8 +1695,8 @@ async def q4_low_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["psych_low_result"] = answer
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q4_KPI_FAIL")
     await update.message.reply_text(
-        f"{question_header(6, FORM_TOTAL_QUESTIONS)}*Вопрос 7 из 23:*\n"
-        "Если вы понимаете, что не выполняете обещанный KPI/план, что делаете?\n\n"
+        f"{question_header(6, FORM_TOTAL_QUESTIONS)}*Вопрос 7 из 20:*\n"
+        "Что для вас крутой ТимЛид?\n\n"
         "_Ответ должен быть развернутым: минимум 50 символов._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -1723,15 +1717,16 @@ async def q4_kpi_fail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return Q4_KPI_FAIL
 
     context.user_data["psych_kpi_fail"] = answer
-    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q4_BOUNDARIES")
+    # Старые 3 психо-вопроса отключены; оставляем поля пустыми для совместимости с таблицей.
+    context.user_data["psych_boundaries"] = ""
+    context.user_data["psych_conflict"] = ""
+    context.user_data["psych_stress_control"] = ""
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q5_ENGLISH")
     await update.message.reply_text(
-        f"{question_header(7, FORM_TOTAL_QUESTIONS)}*Вопрос 8 из 23:*\n"
-        "Что для вас недопустимо в рабочей коммуникации?\n\n"
-        "_Ответ должен быть развернутым: минимум 50 символов._",
-        parse_mode="Markdown",
-        reply_markup=cancel_keyboard(),
+        f"{question_header(7, FORM_TOTAL_QUESTIONS)}*Вопрос 8 из 20:*\nКакой у вас уровень английского языка?",
+        parse_mode="Markdown", reply_markup=english_keyboard(),
     )
-    return Q4_BOUNDARIES
+    return Q5_ENGLISH
 
 
 async def q4_boundaries(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1749,8 +1744,8 @@ async def q4_boundaries(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["psych_boundaries"] = answer
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q4_CONFLICT")
     await update.message.reply_text(
-        f"{question_header(8, FORM_TOTAL_QUESTIONS)}*Вопрос 9 из 23:*\n"
-        "Как вы действуете в конфликте с решением руководителя?\n\n"
+        f"{question_header(8, FORM_TOTAL_QUESTIONS)}*Вопрос 9 из 20:*\n"
+        "Что для вас крутой ТимЛид?\n\n"
         "_Ответ должен быть развернутым: минимум 50 символов._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -1773,8 +1768,8 @@ async def q4_conflict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["psych_conflict"] = answer
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q4_STRESS_CONTROL")
     await update.message.reply_text(
-        f"{question_header(9, FORM_TOTAL_QUESTIONS)}*Вопрос 10 из 23:*\n"
-        "Если чувствуете сильное эмоциональное напряжение в смене, что делаете?\n\n"
+        f"{question_header(9, FORM_TOTAL_QUESTIONS)}*Вопрос 10 из 20:*\n"
+        "О чем ты мечтаешь?\n\n"
         "_Ответ должен быть развернутым: минимум 50 символов._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -1797,7 +1792,7 @@ async def q4_stress_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["psych_stress_control"] = answer
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q5_ENGLISH")
     await update.message.reply_text(
-        f"{question_header(10, FORM_TOTAL_QUESTIONS)}*Вопрос 11 из 23:*\nКакой у вас уровень английского языка?",
+        f"{question_header(10, FORM_TOTAL_QUESTIONS)}*Вопрос 11 из 20:*\nКакой у вас уровень английского языка?",
         parse_mode="Markdown", reply_markup=english_keyboard(),
     )
     return Q5_ENGLISH
@@ -1811,7 +1806,7 @@ async def q5_english_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(f"🌐 Английский: *{level}* ✅", parse_mode="Markdown")
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q6_PLATFORM")
     await q.message.reply_text(
-        f"{question_header(11, FORM_TOTAL_QUESTIONS)}*Вопрос 12 из 23:*\nКакая платформа вас интересует?",
+        f"{question_header(8, FORM_TOTAL_QUESTIONS)}*Вопрос 9 из 20:*\nКакая платформа вас интересует?",
         parse_mode="Markdown", reply_markup=platform_keyboard(),
     )
     return Q6_PLATFORM
@@ -1836,7 +1831,7 @@ async def q6_platform_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q7_SHIFT")
     await q.message.reply_text(
-        f"{question_header(12, FORM_TOTAL_QUESTIONS)}*Вопрос 13 из 23:*\nКакая смена вам подходит?\n\n"
+        f"{question_header(9, FORM_TOTAL_QUESTIONS)}*Вопрос 10 из 20:*\nКакая смена вам подходит?\n\n"
         f"🟢 *Сейчас открыт набор ({platform}):* {open_list}\n\n"
         "_Можно выбрать несколько, затем нажмите «Подтвердить»._",
         parse_mode="Markdown",
@@ -1859,7 +1854,7 @@ async def q7_shift_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"🕐 Смены: *{shifts_str}* ✅", parse_mode="Markdown")
         set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q8_EXPERIENCE")
         await q.message.reply_text(
-            f"{question_header(13, FORM_TOTAL_QUESTIONS)}*Вопрос 14 из 23:*\nКакой у вас стаж работы оператором/чаттером?\n(например: 6 месяцев / 1 год)",
+            f"{question_header(10, FORM_TOTAL_QUESTIONS)}*Вопрос 11 из 20:*\nКакой у вас стаж работы оператором/чаттером?\n(например: 6 месяцев / 1 год)",
             parse_mode="Markdown", reply_markup=cancel_keyboard(),
         )
         return Q8_EXPERIENCE
@@ -1894,12 +1889,9 @@ async def waitlist_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 *Имя:* {d.get('name', '—')}\n"
             f"🎂 *Возраст:* {d.get('age', '—')}\n"
             "\n🧠 *Психо-блок (вопрос -> ответ):*\n"
-            f"1) Фидбек от руководителя: {d.get('psych_feedback', '—')}\n"
-            f"2) Слабый результат смены: {d.get('psych_low_result', '—')}\n"
-            f"3) Невыполнение KPI: {d.get('psych_kpi_fail', '—')}\n"
-            f"4) Границы коммуникации: {d.get('psych_boundaries', '—')}\n"
-            f"5) Конфликт с руководителем: {d.get('psych_conflict', '—')}\n"
-            f"6) Самоконтроль в стрессе: {d.get('psych_stress_control', '—')}\n"
+            f"1) Классный рабочий день: {d.get('psych_feedback', '—')}\n"
+            f"2) Мечта: {d.get('psych_low_result', '—')}\n"
+            f"3) Крутой ТимЛид: {d.get('psych_kpi_fail', '—')}\n"
             f"🌐 *Английский:* {d.get('english', '—')}\n"
             f"📱 *Платформа:* {d.get('platform', '—')}\n"
             f"🕐 *Смены:* {d.get('shifts', '—')}\n"
@@ -1938,7 +1930,7 @@ async def q8_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["experience"] = update.message.text
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q9_TOP_PAGES")
     await update.message.reply_text(
-        f"{question_header(14, FORM_TOTAL_QUESTIONS)}*Вопрос 15 из 23:*\nС каким топом страниц вы работали?",
+        f"{question_header(11, FORM_TOTAL_QUESTIONS)}*Вопрос 12 из 20:*\nС каким топом страниц вы работали?",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
     return Q9_TOP_PAGES
@@ -1952,7 +1944,7 @@ async def q9_top_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q10_CONVERSION")
 
     await update.message.reply_text(
-        f"{question_header(15, FORM_TOTAL_QUESTIONS)}*Вопрос 16 из 23:*\n"
+        f"{question_header(12, FORM_TOTAL_QUESTIONS)}*Вопрос 13 из 20:*\n"
         "Какую конверсию вы обычно показывали?\n\n"
         "💡 *Конверсия* — это процент фанов, которые купили что-то у модели, от всех, "
         "с кем вы общались за смену.\n"
@@ -1972,7 +1964,7 @@ async def q10_conversion(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q11_MODEL_TYPES")
 
     await update.message.reply_text(
-        f"{question_header(16, FORM_TOTAL_QUESTIONS)}*Вопрос 17 из 23:*\n"
+        f"{question_header(13, FORM_TOTAL_QUESTIONS)}*Вопрос 14 из 20:*\n"
         "С каким типажом моделей работали?",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -1988,7 +1980,7 @@ async def q11_model_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q12_WORKED_PLATFORMS")
 
     await update.message.reply_text(
-        f"{question_header(17, FORM_TOTAL_QUESTIONS)}*Вопрос 18 из 23:*\n"
+        f"{question_header(14, FORM_TOTAL_QUESTIONS)}*Вопрос 15 из 20:*\n"
         "На каких платформах у вас уже был практический опыт?",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -2004,7 +1996,7 @@ async def q12_worked_platforms(update: Update, context: ContextTypes.DEFAULT_TYP
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q13_FINANCIAL")
 
     await update.message.reply_text(
-        f"{question_header(18, FORM_TOTAL_QUESTIONS)}*Вопрос 19 из 23:*\n"
+        f"{question_header(15, FORM_TOTAL_QUESTIONS)}*Вопрос 16 из 20:*\n"
         "Какой уровень дохода рассматриваешь на старте и через 3 месяца?",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -2020,7 +2012,7 @@ async def q13_financial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q15_AVG_CHECK")
 
     await update.message.reply_text(
-        f"{question_header(19, FORM_TOTAL_QUESTIONS)}*Вопрос 20 из 23:*\n"
+        f"{question_header(16, FORM_TOTAL_QUESTIONS)}*Вопрос 17 из 20:*\n"
         "Какой средний чек вы делали за смену?",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -2039,7 +2031,7 @@ async def q15_avg_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q16_MAIN_ACTIVITY")
 
     await update.message.reply_text(
-        f"{question_header(20, FORM_TOTAL_QUESTIONS)}*Вопрос 21 из 23:*\n"
+        f"{question_header(17, FORM_TOTAL_QUESTIONS)}*Вопрос 18 из 20:*\n"
         "Есть ли у вас основная деятельность или учеба?",
         parse_mode="Markdown",
         reply_markup=main_activity_keyboard(),
@@ -2089,7 +2081,7 @@ async def q16_main_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Нет — сразу к графику
         set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q17_SCHEDULE")
         await update.message.reply_text(
-            f"{question_header(21, FORM_TOTAL_QUESTIONS)}*Вопрос 22 из 23:*\n"
+            f"{question_header(18, FORM_TOTAL_QUESTIONS)}*Вопрос 19 из 20:*\n"
             "Какой график вам подходит: 5/2 или 6/1?",
             parse_mode="Markdown",
             reply_markup=schedule_keyboard(),
@@ -2108,7 +2100,7 @@ async def q16b_activity_detail(update: Update, context: ContextTypes.DEFAULT_TYP
 
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q17_SCHEDULE")
     await update.message.reply_text(
-        f"{question_header(21, FORM_TOTAL_QUESTIONS)}*Вопрос 22 из 23:*\n"
+        f"{question_header(18, FORM_TOTAL_QUESTIONS)}*Вопрос 19 из 20:*\n"
         "Какой график вам подходит: 5/2 или 6/1?",
         parse_mode="Markdown",
         reply_markup=schedule_keyboard(),
@@ -2132,7 +2124,7 @@ async def q17_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q14_GMAIL")
 
     await update.message.reply_text(
-        f"{question_header(22, FORM_TOTAL_QUESTIONS)}*Вопрос 23 из 23:*\n"
+        f"{question_header(19, FORM_TOTAL_QUESTIONS)}*Вопрос 20 из 20:*\n"
         "Напишите, пожалуйста, ваш Gmail — HR отправит на него обучающий гайд:",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -2204,12 +2196,9 @@ async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 *Имя:* {d.get('name', '—')}\n"
             f"🎂 *Возраст:* {d.get('age', '—')}\n"
             "\n🧠 *Психо-блок (вопрос -> ответ):*\n"
-            f"1) Фидбек от руководителя: {d.get('psych_feedback', '—')}\n"
-            f"2) Слабый результат смены: {d.get('psych_low_result', '—')}\n"
-            f"3) Невыполнение KPI: {d.get('psych_kpi_fail', '—')}\n"
-            f"4) Границы коммуникации: {d.get('psych_boundaries', '—')}\n"
-            f"5) Конфликт с руководителем: {d.get('psych_conflict', '—')}\n"
-            f"6) Самоконтроль в стрессе: {d.get('psych_stress_control', '—')}\n"
+            f"1) Классный рабочий день: {d.get('psych_feedback', '—')}\n"
+            f"2) Мечта: {d.get('psych_low_result', '—')}\n"
+            f"3) Крутой ТимЛид: {d.get('psych_kpi_fail', '—')}\n"
             f"🌐 *Английский:* {d.get('english', '—')}\n"
             f"📱 *Платформа:* {d.get('platform', '—')}\n"
             f"🕐 *Смены:* {d.get('shifts', '—')}\n"
@@ -2296,7 +2285,7 @@ async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=source_keyboard(),
     )
     await q.message.reply_text(
-        f"{question_header(1, FORM_TOTAL_QUESTIONS)}*Вопрос 2 из 23:*\n"
+        f"{question_header(1, FORM_TOTAL_QUESTIONS)}*Вопрос 2 из 20:*\n"
         "Откуда вы о нас узнали?\n\n"
         "_Напишите своими словами: например, «от друга @username», «реклама в Telegram», «сам нашёл» и т.д._",
         parse_mode="Markdown",
