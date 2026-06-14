@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from collections import defaultdict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
@@ -51,6 +52,8 @@ BOT_TOKEN        = _required_env("BOT_TOKEN")
 HR_CHAT_ID = _optional_env_int("HR_CHAT_ID")
 BOT_USERNAME     = os.getenv("BOT_USERNAME", "allstars_hr_bot")
 BANNER_GDRIVE_ID = "1-15wE_zOrskUqb5sClN4hTS_Bi91AlwE"
+HR_TOPIC_GUIDE_ID = _optional_env_int("HR_TOPIC_GUIDE_ID")
+HR_TOPIC_TEST_SHIFT_ID = _optional_env_int("HR_TOPIC_TEST_SHIFT_ID")
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
 
@@ -127,6 +130,8 @@ GOOGLE_CREDS = load_google_creds()
 SPREADSHEET_NAME = os.environ.get("GOOGLE_SPREADSHEET_NAME", "AllStarsLeads")
 SPREADSHEET_ID = os.environ.get("GOOGLE_SPREADSHEET_ID", "").strip()
 MAIN_WORKSHEET_TITLE = os.environ.get("GOOGLE_MAIN_WORKSHEET_NAME", "AllStarsLeads")
+FUNNEL_WORKSHEET_TITLE = os.environ.get("GOOGLE_FUNNEL_WORKSHEET_NAME", "Воронка")
+FUNNEL_STAGE_GUIDE = os.environ.get("FUNNEL_STAGE_GUIDE", "изучает гайд")
 MAIN_HEADERS = [
     "Дата", "TG Username", "TG ID",
     "Источник", "Имя", "Возраст",
@@ -156,6 +161,7 @@ _gs_client = None
 _gs_sheet  = None
 _gs_rejections = None  # Лист с отказами от верификации
 _gs_leads = None       # Лист с лидами (первый запуск /start)
+_gs_funnel = None      # Лист с этапами воронки
 
 
 def _extract_spreadsheet_id(value: str) -> str:
@@ -285,6 +291,87 @@ def get_leads_sheet():
         raise
 
 
+def get_funnel_sheet():
+    """Возвращает лист воронки, создаёт если не существует."""
+    global _gs_funnel, _gs_client
+    try:
+        if _gs_funnel is not None:
+            return _gs_funnel
+
+        get_sheet()
+        spreadsheet = open_spreadsheet(_gs_client)
+        try:
+            _gs_funnel = spreadsheet.worksheet(FUNNEL_WORKSHEET_TITLE)
+        except Exception:
+            _gs_funnel = spreadsheet.add_worksheet(title=FUNNEL_WORKSHEET_TITLE, rows=5000, cols=6)
+            _gs_funnel.append_row([
+                "Дата",
+                "TG Username",
+                "TG ID",
+                "Этап",
+                "Дата периода (с 21:00)",
+                "Период",
+            ])
+        return _gs_funnel
+    except Exception as e:
+        logger.error(f"Funnel sheet error: {type(e).__name__}: {e}", exc_info=True)
+        raise
+
+
+def register_funnel_stage(user_id: int | str | None, username: str, stage: str) -> tuple[bool, str]:
+    """Регистрирует перевод лида в этап воронки. Дедуп в рамках текущего периода."""
+    stage_clean = str(stage or "").strip()
+    if not stage_clean:
+        return False, "empty_stage"
+
+    uid = str(user_id).strip() if user_id is not None else ""
+    uname = str(username or "").strip().lstrip("@")
+
+    if not uid and not uname:
+        return False, "empty_user"
+
+    sheet = get_funnel_sheet()
+    rows = sheet.get_all_values()
+    if not rows:
+        sheet.append_row(["Дата", "TG Username", "TG ID", "Этап", "Дата периода (с 21:00)", "Период"])
+        rows = sheet.get_all_values()
+
+    headers = rows[0]
+    idx_username = headers.index("TG Username") if "TG Username" in headers else 1
+    idx_tg_id = headers.index("TG ID") if "TG ID" in headers else 2
+    idx_stage = headers.index("Этап") if "Этап" in headers else 3
+    idx_period_date = headers.index("Дата периода (с 21:00)") if "Дата периода (с 21:00)" in headers else 4
+
+    now_msk = datetime.now(MSK_TZ)
+    period_start = _business_period_start(now_msk)
+    period_key = period_start.strftime("%Y-%m-%d")
+    stage_key = stage_clean.casefold()
+
+    for row in rows[1:]:
+        row_stage = row[idx_stage].strip().casefold() if idx_stage < len(row) else ""
+        row_period = row[idx_period_date].strip() if idx_period_date < len(row) else ""
+        row_uid = row[idx_tg_id].strip() if idx_tg_id < len(row) else ""
+        row_uname = row[idx_username].strip().lstrip("@").casefold() if idx_username < len(row) else ""
+
+        if row_stage != stage_key or row_period != period_key:
+            continue
+        if uid and row_uid == uid:
+            return False, "duplicate"
+        if (not uid) and uname and row_uname == uname.casefold():
+            return False, "duplicate"
+
+    period_end = period_start + timedelta(days=1)
+    sheet.append_row([
+        now_msk.strftime("%d.%m.%Y %H:%M"),
+        uname,
+        uid,
+        stage_clean,
+        period_key,
+        f"{period_start.strftime('%d.%m %H:%M')} - {period_end.strftime('%d.%m %H:%M')}",
+    ])
+    return True, "added"
+
+
 def _business_period_start(dt: datetime) -> datetime:
     """Начало операционного дня: каждый день в 21:00 МСК."""
     local_dt = dt.astimezone(MSK_TZ)
@@ -351,6 +438,58 @@ def _is_stats_allowed(update: Update) -> bool:
     return (chat_id in ALLOWED_STATS_IDS) or (user_id in ALLOWED_STATS_IDS)
 
 
+def _funnel_topic_for_stage(stage: str) -> int | None:
+    key = str(stage or "").strip().casefold()
+    if not key:
+        return None
+
+    if "гайд" in key:
+        return HR_TOPIC_GUIDE_ID
+    if "тест" in key and "смен" in key:
+        return HR_TOPIC_TEST_SHIFT_ID
+    return None
+
+
+async def notify_funnel_stage_topic(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int | str | None,
+    username: str,
+    stage: str,
+    source: str,
+) -> bool:
+    """Отправляет кандидата в нужную тему HR-чата по этапу воронки."""
+    if not HR_CHAT_ID:
+        return False
+
+    topic_id = _funnel_topic_for_stage(stage)
+    if not topic_id:
+        return False
+
+    uid = str(user_id).strip() if user_id is not None else ""
+    uname = str(username or "").strip().lstrip("@")
+    profile = f"@{uname}" if uname else (f"tg://user?id={uid}" if uid else "не указан")
+
+    text = (
+        "📥 Кандидат добавлен в этап\n\n"
+        f"Этап: {stage}\n"
+        f"Пользователь: {profile}\n"
+        f"TG ID: {uid or 'не указан'}\n"
+        f"Источник: {source}"
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=HR_CHAT_ID,
+            message_thread_id=topic_id,
+            text=text,
+            disable_web_page_preview=True,
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Funnel topic notify error: {type(e).__name__}: {e}", exc_info=True)
+        return False
+
+
 def build_leads_stats_text() -> str:
     leads = get_leads_sheet()
     rows = leads.get_all_values()
@@ -388,6 +527,73 @@ def build_leads_stats_text() -> str:
         f"*Прошлый период* ({prev_start.strftime('%d.%m %H:%M')} → {prev_end.strftime('%d.%m %H:%M')}): *{previous}*\n"
         f"*Всего лидов:* *{total}*"
     )
+
+
+def build_funnel_stats_text() -> str:
+    sheet = get_funnel_sheet()
+    rows = sheet.get_all_values()
+    if not rows or len(rows) == 1:
+        return "📁 Воронка\n\nПока нет данных."
+
+    headers = rows[0]
+    idx_date = headers.index("Дата") if "Дата" in headers else 0
+    idx_stage = headers.index("Этап") if "Этап" in headers else 3
+
+    now_msk = datetime.now(MSK_TZ)
+    current_start = _business_period_start(now_msk)
+    prev_start = current_start - timedelta(days=1)
+    prev_end = current_start
+
+    current_by_stage: dict[str, int] = defaultdict(int)
+    previous_by_stage: dict[str, int] = defaultdict(int)
+    total_by_stage: dict[str, int] = defaultdict(int)
+
+    for row in rows[1:]:
+        if idx_date >= len(row):
+            continue
+        dt = _parse_saved_datetime(row[idx_date])
+        if not dt:
+            continue
+
+        stage = row[idx_stage].strip() if idx_stage < len(row) else ""
+        if not stage:
+            stage = "(без этапа)"
+
+        total_by_stage[stage] += 1
+        if current_start <= dt < now_msk:
+            current_by_stage[stage] += 1
+        if prev_start <= dt < prev_end:
+            previous_by_stage[stage] += 1
+
+    stages = sorted(total_by_stage.keys(), key=lambda s: (-current_by_stage.get(s, 0), s.casefold()))
+    lines = [
+        "📁 Статистика воронки",
+        "",
+        f"Текущий период ({current_start.strftime('%d.%m %H:%M')} -> сейчас):",
+    ]
+
+    current_total = sum(current_by_stage.values())
+    previous_total = sum(previous_by_stage.values())
+    all_total = sum(total_by_stage.values())
+
+    if current_total == 0:
+        lines.append("- Пока нет добавлений")
+    else:
+        for stage in stages:
+            value = current_by_stage.get(stage, 0)
+            if value:
+                lines.append(f"- {stage}: {value}")
+
+    lines.extend([
+        "",
+        f"Прошлый период: {previous_total}",
+        f"Всего событий: {all_total}",
+        "",
+        "Подсказка:",
+        "- /funnel_add <tg_id> <этап>",
+        "- /funnel_add @username <этап>",
+    ])
+    return "\n".join(lines)
 
 
 def parse_interview_datetime(date_str: str, time_str: str):
@@ -2506,6 +2712,27 @@ async def guide_ack_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer("Отлично! Открываю ссылки на гайды.")
 
+    try:
+        user = update.effective_user
+        added, reason = register_funnel_stage(
+            user_id=user.id if user else None,
+            username=(user.username if user else "") or (user.full_name if user else ""),
+            stage=FUNNEL_STAGE_GUIDE,
+        )
+        if added:
+            logger.info(f"Funnel stage registered automatically: stage='{FUNNEL_STAGE_GUIDE}', user_id={user.id if user else 'unknown'}")
+            await notify_funnel_stage_topic(
+                context=context,
+                user_id=user.id if user else None,
+                username=(user.username if user else "") or (user.full_name if user else ""),
+                stage=FUNNEL_STAGE_GUIDE,
+                source="auto_guide_ack",
+            )
+        elif reason != "duplicate":
+            logger.warning(f"Funnel stage auto-register skipped: reason={reason}")
+    except Exception as e:
+        logger.error(f"Funnel stage auto-register error: {type(e).__name__}: {e}", exc_info=True)
+
     await q.edit_message_text(
         "📘 *Гайд агентства Allstars*\n\n"
         "✅ Условие зафиксировано: доступ к материалам выдает HR после анкеты.\n\n"
@@ -2557,6 +2784,68 @@ async def leads_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Leads stats error: {type(e).__name__}: {e}", exc_info=True)
         await update.message.reply_text("Не удалось получить статистику лидов. Попробуйте позже.")
+
+
+async def funnel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_stats_allowed(update):
+        await update.message.reply_text("⛔ Команда доступна только HR/админу.")
+        return
+
+    try:
+        text = build_funnel_stats_text()
+        await update.message.reply_text(text)
+    except Exception as e:
+        logger.error(f"Funnel stats error: {type(e).__name__}: {e}", exc_info=True)
+        await update.message.reply_text("Не удалось получить статистику воронки. Попробуйте позже.")
+
+
+async def funnel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_stats_allowed(update):
+        await update.message.reply_text("⛔ Команда доступна только HR/админу.")
+        return
+
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Использование:\n"
+            "/funnel_add <tg_id> <этап>\n"
+            "/funnel_add @username <этап>\n\n"
+            "Пример: /funnel_add 123456789 тест смена"
+        )
+        return
+
+    target = args[0].strip()
+    stage = " ".join(args[1:]).strip()
+
+    user_id: int | str | None = None
+    username = ""
+    if target.startswith("@"):
+        username = target.lstrip("@").strip()
+    elif re.fullmatch(r"-?\d+", target):
+        user_id = target
+    else:
+        await update.message.reply_text("Первый аргумент должен быть TG ID (число) или @username.")
+        return
+
+    try:
+        added, reason = register_funnel_stage(user_id=user_id, username=username, stage=stage)
+        if added:
+            await notify_funnel_stage_topic(
+                context=context,
+                user_id=user_id,
+                username=username,
+                stage=stage,
+                source="manual_funnel_add",
+            )
+            await update.message.reply_text(f"✅ Этап добавлен: {stage}")
+            return
+        if reason == "duplicate":
+            await update.message.reply_text("ℹ️ Уже был добавлен этот этап для пользователя в текущем периоде.")
+            return
+        await update.message.reply_text(f"⚠️ Не удалось добавить этап: {reason}")
+    except Exception as e:
+        logger.error(f"Funnel add error: {type(e).__name__}: {e}", exc_info=True)
+        await update.message.reply_text("Не удалось добавить этап воронки. Попробуйте позже.")
 
 
 # ─────────────────────────────────────────────
@@ -2614,6 +2903,8 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("leads", leads_stats))
+    app.add_handler(CommandHandler("funnel", funnel_stats))
+    app.add_handler(CommandHandler("funnel_add", funnel_add))
     app.add_handler(conv)
 
     # Inline-кнопки подразделов + навигация «Назад»
