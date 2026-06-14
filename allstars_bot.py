@@ -32,6 +32,25 @@ BOT_TOKEN        = os.getenv("BOT_TOKEN", "8326443265:AAFAC5HFM_Bubhqya0xImJAkdv
 HR_CHAT_ID = 863939675
 BOT_USERNAME     = os.getenv("BOT_USERNAME", "allstars_hr_bot")
 BANNER_GDRIVE_ID = "1-15wE_zOrskUqb5sClN4hTS_Bi91AlwE"
+MSK_TZ = ZoneInfo("Europe/Moscow")
+
+
+def _parse_int_set(raw: str) -> set[int]:
+    result: set[int] = set()
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            result.add(int(part))
+        except ValueError:
+            logger.warning(f"Invalid integer in STATS_CHAT_IDS: '{part}'")
+    return result
+
+
+ALLOWED_STATS_IDS = _parse_int_set(os.getenv("STATS_CHAT_IDS", ""))
+if HR_CHAT_ID:
+    ALLOWED_STATS_IDS.add(int(HR_CHAT_ID))
 
 # ── Открытые смены по платформам — меняй в Railway Variables ─
 # Формат: коды через запятую.  Коды: 00-06 | 06-12 | 12-18 | 18-00
@@ -117,6 +136,7 @@ Q_DUPLICATE, Q1_SOURCE, Q2_NAME, Q3_AGE, Q4_FEEDBACK, Q4_LOW_RESULT, Q4_KPI_FAIL
 _gs_client = None
 _gs_sheet  = None
 _gs_rejections = None  # Лист с отказами от верификации
+_gs_leads = None       # Лист с лидами (первый запуск /start)
 
 
 def _extract_spreadsheet_id(value: str) -> str:
@@ -217,6 +237,138 @@ def get_sheet():
 
 def get_main_worksheet():
     return get_sheet()
+
+
+def get_leads_sheet():
+    """Возвращает лист 'Лиды', создаёт если не существует."""
+    global _gs_leads, _gs_client
+    try:
+        if _gs_leads is not None:
+            return _gs_leads
+
+        get_sheet()
+        spreadsheet = open_spreadsheet(_gs_client)
+        try:
+            _gs_leads = spreadsheet.worksheet("Лиды")
+        except Exception:
+            _gs_leads = spreadsheet.add_worksheet(title="Лиды", rows=5000, cols=6)
+            _gs_leads.append_row([
+                "Дата",
+                "TG Username",
+                "TG ID",
+                "Имя",
+                "Дата периода (с 21:00)",
+                "Период",
+            ])
+        return _gs_leads
+    except Exception as e:
+        logger.error(f"Leads sheet error: {type(e).__name__}: {e}", exc_info=True)
+        raise
+
+
+def _business_period_start(dt: datetime) -> datetime:
+    """Начало операционного дня: каждый день в 21:00 МСК."""
+    local_dt = dt.astimezone(MSK_TZ)
+    pivot = local_dt.replace(hour=21, minute=0, second=0, microsecond=0)
+    if local_dt >= pivot:
+        return pivot
+    return pivot - timedelta(days=1)
+
+
+def _parse_saved_datetime(value: str) -> datetime | None:
+    value = (value or "").strip()
+    if not value:
+        return None
+
+    for fmt in ("%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(value, fmt).replace(tzinfo=MSK_TZ)
+        except ValueError:
+            continue
+    return None
+
+
+def register_lead_if_new(user) -> bool:
+    """
+    Регистрирует лида при первом запуске /start.
+    Возвращает True, если это новый лид.
+    """
+    try:
+        leads = get_leads_sheet()
+        rows = leads.get_all_values()
+        if not rows:
+            leads.append_row(["Дата", "TG Username", "TG ID", "Имя", "Дата периода (с 21:00)", "Период"])
+            rows = leads.get_all_values()
+
+        headers = rows[0]
+        idx_tg_id = headers.index("TG ID") if "TG ID" in headers else 2
+
+        uid = str(user.id)
+        for row in rows[1:]:
+            if idx_tg_id < len(row) and str(row[idx_tg_id]).strip() == uid:
+                return False
+
+        now_msk = datetime.now(MSK_TZ)
+        period_start = _business_period_start(now_msk)
+        period_end = period_start + timedelta(days=1)
+
+        leads.append_row([
+            now_msk.strftime("%d.%m.%Y %H:%M"),
+            user.username or "",
+            uid,
+            user.full_name or "",
+            period_start.strftime("%Y-%m-%d"),
+            f"{period_start.strftime('%d.%m %H:%M')} - {period_end.strftime('%d.%m %H:%M')}",
+        ])
+        return True
+    except Exception as e:
+        logger.error(f"Lead registration error: {type(e).__name__}: {e}", exc_info=True)
+        return False
+
+
+def _is_stats_allowed(update: Update) -> bool:
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    user_id = update.effective_user.id if update.effective_user else None
+    return (chat_id in ALLOWED_STATS_IDS) or (user_id in ALLOWED_STATS_IDS)
+
+
+def build_leads_stats_text() -> str:
+    leads = get_leads_sheet()
+    rows = leads.get_all_values()
+    if not rows or len(rows) == 1:
+        return "📊 Лиды\n\nПока нет данных."
+
+    headers = rows[0]
+    idx_date = headers.index("Дата") if "Дата" in headers else 0
+
+    now_msk = datetime.now(MSK_TZ)
+    current_start = _business_period_start(now_msk)
+    prev_start = current_start - timedelta(days=1)
+    prev_end = current_start
+
+    total = 0
+    current = 0
+    previous = 0
+
+    for row in rows[1:]:
+        if idx_date >= len(row):
+            continue
+        dt = _parse_saved_datetime(row[idx_date])
+        if not dt:
+            continue
+        total += 1
+        if current_start <= dt < now_msk:
+            current += 1
+        if prev_start <= dt < prev_end:
+            previous += 1
+
+    return (
+        "📊 *Статистика лидов*\n"
+        "_(лид = первый запуск /start)_\n\n"
+        f"*Текущий период* ({current_start.strftime('%d.%m %H:%M')} → сейчас): *{current}*\n"
+        f"*Прошлый период* ({prev_start.strftime('%d.%m %H:%M')} → {prev_end.strftime('%d.%m %H:%M')}): *{previous}*\n"
+        f"*Всего лидов:* *{total}*"
+    )
 
 
 def parse_interview_datetime(date_str: str, time_str: str):
@@ -1264,6 +1416,11 @@ async def notify_hr(context: ContextTypes.DEFAULT_TYPE, data: dict):
 # ─────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
+
+    if update.effective_user:
+        is_new_lead = register_lead_if_new(update.effective_user)
+        if is_new_lead:
+            logger.info(f"New lead registered from /start: user_id={update.effective_user.id}")
 
     # ── Онбординг: цепочка сообщений с паузами ──
     await update.message.reply_text("Привет! 👋")
@@ -2370,6 +2527,19 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def leads_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_stats_allowed(update):
+        await update.message.reply_text("⛔ Команда доступна только HR/админу.")
+        return
+
+    try:
+        text = build_leads_stats_text()
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Leads stats error: {type(e).__name__}: {e}", exc_info=True)
+        await update.message.reply_text("Не удалось получить статистику лидов. Попробуйте позже.")
+
+
 # ─────────────────────────────────────────────
 #  ЗАПУСК
 # ─────────────────────────────────────────────
@@ -2424,6 +2594,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("leads", leads_stats))
     app.add_handler(conv)
 
     # Inline-кнопки подразделов + навигация «Назад»
