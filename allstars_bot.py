@@ -25,11 +25,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def _required_env(name: str) -> str:
+    """Return required env variable or raise a clear startup error."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+def _optional_env_int(name: str, default: int | None = None) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise RuntimeError(f"Environment variable {name} must be an integer")
+
+
 # ─────────────────────────────────────────────
 #  КОНФИГ
 # ─────────────────────────────────────────────
-BOT_TOKEN        = os.getenv("BOT_TOKEN", "8326443265:AAFAC5HFM_Bubhqya0xImJAkdvwt3LQdyXI")
-HR_CHAT_ID = 863939675
+BOT_TOKEN        = _required_env("BOT_TOKEN")
+HR_CHAT_ID = _optional_env_int("HR_CHAT_ID")
 BOT_USERNAME     = os.getenv("BOT_USERNAME", "allstars_hr_bot")
 BANNER_GDRIVE_ID = "1-15wE_zOrskUqb5sClN4hTS_Bi91AlwE"
 MSK_TZ = ZoneInfo("Europe/Moscow")
@@ -88,7 +107,7 @@ _tg_file_cache: dict[str, str] = {}  # key → tg file_id
 
 def load_google_creds() -> dict:
     """Load service account JSON from env, handling escaped newlines/base64 payloads."""
-    raw = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"].strip()
+    raw = _required_env("GOOGLE_SERVICE_ACCOUNT_JSON")
 
     try:
         creds = json.loads(raw)

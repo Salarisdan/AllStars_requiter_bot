@@ -1,2 +1,5 @@
 ﻿scalingo.exe
 *.json
+.env
+.env.*
+!.env.example
