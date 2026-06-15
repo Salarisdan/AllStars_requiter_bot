@@ -737,6 +737,10 @@ async def interview_reminder_job(context: ContextTypes.DEFAULT_TYPE):
 def get_rejections_sheet():
     """Возвращает лист 'Отказы', создаёт его если не существует."""
     global _gs_rejections, _gs_client
+    required_headers = [
+        "Дата", "TG Username", "TG ID", "Имя", "Возраст", "Источник",
+        "Причина отказа", "Английский", "Блок повтора", "Комментарий",
+    ]
     try:
         if _gs_rejections is not None:
             return _gs_rejections
@@ -748,12 +752,60 @@ def get_rejections_sheet():
             _gs_rejections = spreadsheet.worksheet("Отказы")
         except Exception:
             # Создаём новый лист
-            _gs_rejections = spreadsheet.add_worksheet(title="Отказы", rows=1000, cols=6)
-            _gs_rejections.append_row(["Дата", "TG Username", "TG ID", "Имя", "Возраст", "Источник"])
+            _gs_rejections = spreadsheet.add_worksheet(title="Отказы", rows=1000, cols=10)
+            _gs_rejections.append_row(required_headers)
+
+        # Обновляем старую структуру листа до актуальной (без удаления существующих данных)
+        if _gs_rejections.col_count < len(required_headers):
+            try:
+                _gs_rejections.add_cols(len(required_headers) - _gs_rejections.col_count)
+            except Exception as col_err:
+                logger.warning(
+                    f"Could not extend rejections worksheet columns: {type(col_err).__name__}: {col_err}"
+                )
+
+        header_row = _gs_rejections.row_values(1)
+        if not header_row:
+            _gs_rejections.append_row(required_headers)
+        elif header_row[:len(required_headers)] != required_headers:
+            _gs_rejections.update("A1:J1", [required_headers])
         return _gs_rejections
     except Exception as e:
         logger.error(f"Rejections sheet error: {type(e).__name__}: {e}", exc_info=True)
         raise
+
+
+def is_form_blocked_for_user(user_id: int) -> bool:
+    """Проверяет, заблокирован ли пользователь для повторного заполнения анкеты."""
+    try:
+        sheet = get_rejections_sheet()
+        rows = sheet.get_all_values()
+        if not rows:
+            return False
+
+        headers = rows[0]
+        idx_tg_id = headers.index("TG ID") if "TG ID" in headers else 2
+        idx_reason = headers.index("Причина отказа") if "Причина отказа" in headers else -1
+        idx_repeat_block = headers.index("Блок повтора") if "Блок повтора" in headers else -1
+
+        user_id_str = str(user_id).strip()
+        for row in rows[1:]:
+            row_tg_id = row[idx_tg_id].strip() if idx_tg_id < len(row) else ""
+            if row_tg_id != user_id_str:
+                continue
+
+            reason = row[idx_reason].strip().lower() if idx_reason != -1 and idx_reason < len(row) else ""
+            blocked = row[idx_repeat_block].strip().lower() if idx_repeat_block != -1 and idx_repeat_block < len(row) else ""
+
+            if reason in {"english_below_b1", "low_english"}:
+                return True
+            if blocked in {"yes", "да", "true", "1"}:
+                return True
+
+    except Exception as e:
+        logger.error(f"Form block check failed: {type(e).__name__}: {e}")
+
+    return False
 
 
 def save_to_sheet(data: dict) -> bool:
@@ -814,10 +866,24 @@ def save_to_sheet(data: dict) -> bool:
     return False
 
 
-def save_rejection(data: dict) -> bool:
-    """Сохраняет отказ от верификации в отдельный лист."""
+def save_rejection(
+    data: dict,
+    reason: str = "verification_declined",
+    repeat_block: bool = False,
+    comment: str = "",
+) -> bool:
+    """Сохраняет отказ в отдельный лист, включая причину и признак блокировки повтора."""
     try:
         sheet = get_rejections_sheet()
+        required_cols = 10
+        if sheet.col_count < required_cols:
+            try:
+                sheet.add_cols(required_cols - sheet.col_count)
+            except Exception as col_err:
+                logger.warning(
+                    f"Could not extend rejections worksheet columns before append: {type(col_err).__name__}: {col_err}"
+                )
+
         sheet.append_row([
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             data.get("username", ""),
@@ -825,6 +891,10 @@ def save_rejection(data: dict) -> bool:
             data.get("name", ""),
             data.get("age", ""),
             data.get("source", ""),
+            reason,
+            data.get("english", ""),
+            "yes" if repeat_block else "no",
+            comment,
         ])
         logger.info("Rejection saved to sheet.")
         return True
@@ -1605,6 +1675,7 @@ async def notify_hr(context: ContextTypes.DEFAULT_TYPE, data: dict):
         "🔔 *Новая заявка AllStars!*\n\n"
         f"*Скрининг:* {e(data.get('screening', '—'))}\n"
         f"*Автотег:* {e(data.get('auto_tag', '—'))}\n\n"
+        f"*Английский:* {e(data.get('english', '—'))}\n"
         f"*Платформа:* {e(data.get('platform', '—'))}\n"
         f"*Имя:* {e(data.get('name', '—'))}\n"
         f"*Тг:* @{e(data.get('username', '—'))} ({e(data.get('user_id', '—'))})\n"
@@ -1635,6 +1706,30 @@ async def notify_hr(context: ContextTypes.DEFAULT_TYPE, data: dict):
         await context.bot.send_message(chat_id=HR_CHAT_ID, text=text, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"HR notify error: {e}")
+
+
+async def notify_hr_low_english_rejection(context: ContextTypes.DEFAULT_TYPE, data: dict):
+    """Отправляет HR уведомление об авто-отказе по уровню английского ниже B1."""
+    if not HR_CHAT_ID:
+        logger.warning("HR_CHAT_ID не задан — уведомление о низком английском не отправлено.")
+        return
+
+    def e(val):
+        return str(val).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+
+    text = (
+        "🚫 *Авто-отказ по английскому (ниже B1)*\n\n"
+        f"*Уровень английского:* {e(data.get('english', '—'))}\n"
+        f"*Имя:* {e(data.get('name', '—'))}\n"
+        f"*Тг:* @{e(data.get('username', '—'))} ({e(data.get('user_id', '—'))})\n"
+        f"*Возраст:* {e(data.get('age', '—'))}\n"
+        f"*Источник:* {e(data.get('source', '—'))}\n"
+        "*Причина:* минимальный порог вакансии B1+"
+    )
+    try:
+        await context.bot.send_message(chat_id=HR_CHAT_ID, text=text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.error(f"HR low english reject notify error: {exc}")
 
 # ─────────────────────────────────────────────
 #  ОСНОВНЫЕ HANDLERS
@@ -1680,6 +1775,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_form_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user and is_form_blocked_for_user(user.id):
+        await update.effective_chat.send_message(
+            "К сожалению, ваша заявка была отклонена по критерию английского языка.\n\n"
+            "Минимальный порог для этой вакансии: *B1 и выше*.\n"
+            "Повторное заполнение анкеты недоступно.",
+            parse_mode="Markdown",
+            reply_markup=main_keyboard(),
+        )
+        return ConversationHandler.END
+
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q18_VERIFICATION")
     await send_section_photo(
         update,
@@ -2190,6 +2296,33 @@ async def q5_english_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     level = q.data.replace("eng_", "")
     context.user_data["english"] = level
+
+    if level in {"A1", "A2"}:
+        await q.edit_message_text(f"🌐 Английский: *{level}*", parse_mode="Markdown")
+        context.user_data["user_id"] = update.effective_user.id
+        context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
+        track_dropoff(context, "english_below_b1")
+        cancel_form_reminders(context, update.effective_user.id)
+        context.user_data["form_active"] = False
+        save_rejection(
+            context.user_data,
+            reason="english_below_b1",
+            repeat_block=True,
+            comment="Минимальный порог для вакансии: B1+",
+        )
+        await notify_hr_low_english_rejection(context, context.user_data)
+        await q.message.reply_text(
+            "╔══════════════════════════════╗\n"
+            "║   😔  ЗАЯВКА ОТКЛОНЕНА     ║\n"
+            "╚══════════════════════════════╝\n\n"
+            "Для этой вакансии нужен уровень английского *B1 и выше*.\n"
+            f"У вас указан уровень: *{level}*.\n\n"
+            "Повторное заполнение анкеты недоступно.",
+            parse_mode="Markdown",
+            reply_markup=main_keyboard(),
+        )
+        return ConversationHandler.END
+
     await q.edit_message_text(f"🌐 Английский: *{level}* ✅", parse_mode="Markdown")
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q6_PLATFORM")
     await q.message.reply_text(
