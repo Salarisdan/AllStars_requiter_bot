@@ -2103,6 +2103,17 @@ async def handle_hr_invite_callback(update: Update, context: ContextTypes.DEFAUL
                 logger.error(f"HR notify reschedule error: {type(e).__name__}: {e}", exc_info=True)
 
 
+async def stale_callback_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gracefully handle callback buttons that do not match current form state."""
+    q = update.callback_query
+    if not q:
+        return
+    try:
+        await q.answer("Эта кнопка устарела. Откройте раздел заново.", show_alert=True)
+    except Exception as e:
+        logger.warning(f"Stale callback answer failed: {type(e).__name__}: {e}")
+
+
 # ─────────────────────────────────────────────
 #  АНКЕТА
 # ─────────────────────────────────────────────
@@ -3134,6 +3145,14 @@ def main():
         fallbacks=[
             CommandHandler("cancel", cancel),
             MessageHandler(filters.Regex("^❌ Отменить заполнение$"), cancel),
+            CallbackQueryHandler(about_callback, pattern="^about_"),
+            CallbackQueryHandler(tools_callback, pattern="^tool_"),
+            CallbackQueryHandler(nda_menu_more_cb, pattern="^nda_menu_more$"),
+            CallbackQueryHandler(guide_ack_cb, pattern="^guide_ack$"),
+            CallbackQueryHandler(guide_back_menu_cb, pattern="^guide_back_menu$"),
+            CallbackQueryHandler(guide_apply_now_cb, pattern="^guide_apply_now$"),
+            CallbackQueryHandler(handle_hr_invite_callback, pattern=r"^interview_(confirm|reschedule):"),
+            CallbackQueryHandler(stale_callback_fallback),
         ],
         allow_reentry=True,
     )
