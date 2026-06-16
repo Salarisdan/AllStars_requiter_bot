@@ -3181,7 +3181,8 @@ def main():
     ))
 
     logger.info("🚀 AllStars Bot started!")
-    app.run_polling(drop_pending_updates=True)
+    # Explicitly request all update types so callback_query updates are always delivered.
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
