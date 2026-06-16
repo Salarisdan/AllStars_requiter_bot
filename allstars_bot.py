@@ -1583,6 +1583,18 @@ def verification_keyboard():
     ])
 
 
+def verification_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📖 Показать подробнее")],
+            [KeyboardButton("✅ Да, согласен(а)")],
+            [KeyboardButton("❌ Нет, не готов(а)")],
+            [KeyboardButton("❌ Отменить заполнение")],
+        ],
+        resize_keyboard=True,
+    )
+
+
 def schedule_keyboard():
     return ReplyKeyboardMarkup(
         [
@@ -1811,7 +1823,7 @@ async def start_form_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "*Готовы пройти верификацию после тест-смены?*"
         ),
         parse_mode="Markdown",
-        reply_markup=verification_keyboard(),
+        reply_markup=verification_reply_keyboard(),
     )
     return Q18_VERIFICATION
 
@@ -2850,6 +2862,76 @@ async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     return Q1_SOURCE
 
 
+async def q18_verification_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (update.message.text or "").strip()
+
+    if text == "❌ Отменить заполнение":
+        return await cancel(update, context)
+
+    if text == "📖 Показать подробнее":
+        await update.message.reply_text(
+            "📖 *Подробно про верификацию и NDA:*\n\n"
+            "1) Верификация только после тест-смены\n"
+            "2) Подходит паспорт/ID/права/ВНЖ\n"
+            "3) Данные не публикуются и защищены договором\n"
+            "4) Это обязательный стандарт безопасности в агентстве",
+            parse_mode="Markdown",
+            reply_markup=verification_reply_keyboard(),
+        )
+        return Q18_VERIFICATION
+
+    if text == "❌ Нет, не готов(а)":
+        context.user_data["verification"] = "❌ Нет"
+        context.user_data["user_id"] = update.effective_user.id
+        context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
+        track_dropoff(context, f"verification_declined_at_{context.user_data.get('current_step', 'unknown')}")
+        cancel_form_reminders(context, update.effective_user.id)
+        context.user_data["form_active"] = False
+        save_rejection(context.user_data)
+        await update.message.chat.send_action(ChatAction.TYPING)
+        await asyncio.sleep(1.2)
+        await update.message.reply_text(
+            "╔══════════════════════════════╗\n"
+            "║   😔  ЗАЯВКА ОТКЛОНЕНА     ║\n"
+            "╚══════════════════════════════╝\n\n"
+            "К сожалению, верификация личности является *обязательным условием* для работы в Allstars.\n\n"
+            "Это не прихоть — это стандарт безопасности, который защищает как моделей, так и всю команду.\n\n"
+            "Без верификации мы не можем допустить оператора к работе с реальными страницами и данными.\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "_Если ты передумаешь — всегда можешь вернуться и заполнить анкету заново. Мы будем рады видеть тебя в команде! 🤝_",
+            parse_mode="Markdown",
+            reply_markup=main_keyboard(),
+        )
+        return ConversationHandler.END
+
+    if text == "✅ Да, согласен(а)":
+        context.user_data["verification"] = "✅ Да"
+        set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q1_SOURCE")
+        await update.message.reply_text(
+            "🪪 Верификация: *✅ Да*",
+            parse_mode="Markdown",
+            reply_markup=source_keyboard(),
+        )
+        await update.message.reply_text(
+            "Отлично! Теперь давай ответим на пару вопросов.",
+            reply_markup=source_keyboard(),
+        )
+        await update.message.reply_text(
+            f"{question_header(1, FORM_TOTAL_QUESTIONS)}*Вопрос 2 из 21:*\n"
+            "Откуда вы о нас узнали?\n\n"
+            "_Напишите своими словами: например, «от друга @username», «реклама в Telegram», «сам нашёл» и т.д._",
+            parse_mode="Markdown",
+            reply_markup=source_keyboard(),
+        )
+        return Q1_SOURCE
+
+    await update.message.reply_text(
+        "Пожалуйста, выберите вариант кнопкой ниже.",
+        reply_markup=verification_reply_keyboard(),
+    )
+    return Q18_VERIFICATION
+
+
 async def guide_apply_now_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -3043,7 +3125,10 @@ def main():
             Q16_MAIN_ACTIVITY:[MessageHandler(filters.TEXT & ~filters.COMMAND, q16_main_activity)],
             Q16B_ACTIVITY_DETAIL:[MessageHandler(filters.TEXT & ~filters.COMMAND, q16b_activity_detail)],
             Q17_SCHEDULE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, q17_schedule)],
-            Q18_VERIFICATION: [CallbackQueryHandler(q18_verification_cb, pattern=VERIFICATION_CALLBACK_PATTERN)],
+            Q18_VERIFICATION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, q18_verification_text),
+                CallbackQueryHandler(q18_verification_cb, pattern=VERIFICATION_CALLBACK_PATTERN),
+            ],
             Q_WAITLIST:       [CallbackQueryHandler(waitlist_cb, pattern="^waitlist_")],
         },
         fallbacks=[
