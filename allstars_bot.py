@@ -1013,6 +1013,7 @@ def estimate_minutes_left(step: int, total: int) -> int:
 
 FORM_TOTAL_QUESTIONS = 21
 MIN_PSYCH_ANSWER_LEN = 50
+VERIFICATION_CALLBACK_PATTERN = r"^(?:verif_yes|verif_no|nda_more)$"
 
 
 def question_header(step: int, total: int = FORM_TOTAL_QUESTIONS) -> str:
@@ -2776,6 +2777,9 @@ async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    if not q:
+        return Q18_VERIFICATION
+
     await q.answer()
 
     if q.data == "nda_more":
@@ -2997,6 +3001,7 @@ def main():
         entry_points=[
             MessageHandler(filters.Regex("^📝 Заполнить анкету$"), handle_menu),
             CallbackQueryHandler(guide_apply_now_cb, pattern="^guide_apply_now$"),
+            CallbackQueryHandler(q18_verification_cb, pattern=VERIFICATION_CALLBACK_PATTERN),
         ],
         states={
             Q_DUPLICATE: [CallbackQueryHandler(duplicate_decision_cb, pattern="^dup_update_")],
@@ -3024,7 +3029,7 @@ def main():
             Q16_MAIN_ACTIVITY:[MessageHandler(filters.TEXT & ~filters.COMMAND, q16_main_activity)],
             Q16B_ACTIVITY_DETAIL:[MessageHandler(filters.TEXT & ~filters.COMMAND, q16b_activity_detail)],
             Q17_SCHEDULE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, q17_schedule)],
-            Q18_VERIFICATION: [CallbackQueryHandler(q18_verification_cb, pattern="^(verif_|nda_more)")],
+            Q18_VERIFICATION: [CallbackQueryHandler(q18_verification_cb, pattern=VERIFICATION_CALLBACK_PATTERN)],
             Q_WAITLIST:       [CallbackQueryHandler(waitlist_cb, pattern="^waitlist_")],
         },
         fallbacks=[
