@@ -2780,7 +2780,21 @@ async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not q:
         return Q18_VERIFICATION
 
-    await q.answer()
+    logger.info("Verification callback received: data=%s user_id=%s", q.data, update.effective_user.id if update.effective_user else "unknown")
+
+    try:
+        await q.answer()
+    except Exception as answer_err:
+        # Callback may become stale; continue flow and still send visible messages.
+        logger.warning(f"Callback answer failed in verification flow: {type(answer_err).__name__}: {answer_err}")
+
+    async def _edit_or_reply_verification_status(text: str):
+        try:
+            await q.edit_message_text(text, parse_mode="Markdown")
+        except Exception as edit_err:
+            logger.warning(f"Verification status edit failed: {type(edit_err).__name__}: {edit_err}")
+            if q.message:
+                await q.message.reply_text(text, parse_mode="Markdown")
 
     if q.data == "nda_more":
         await q.message.reply_text(
@@ -2794,7 +2808,7 @@ async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         return Q18_VERIFICATION
 
     if q.data == "verif_no":
-        await q.edit_message_text("🪪 Верификация: *❌ Нет*", parse_mode="Markdown")
+        await _edit_or_reply_verification_status("🪪 Верификация: *❌ Нет*")
         context.user_data["verification"] = "❌ Нет"
         context.user_data["user_id"]  = update.effective_user.id
         context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
@@ -2820,7 +2834,7 @@ async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Верификация — Да, продолжаем анкету
     context.user_data["verification"] = "✅ Да"
-    await q.edit_message_text("🪪 Верификация: *✅ Да*", parse_mode="Markdown")
+    await _edit_or_reply_verification_status("🪪 Верификация: *✅ Да*")
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q1_SOURCE")
     await q.message.reply_text(
         "Отлично! Теперь давай ответим на пару вопросов.",
