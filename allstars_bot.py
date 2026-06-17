@@ -797,7 +797,7 @@ def is_form_blocked_for_user(user_id: int) -> bool:
             reason = row[idx_reason].strip().lower() if idx_reason != -1 and idx_reason < len(row) else ""
             blocked = row[idx_repeat_block].strip().lower() if idx_repeat_block != -1 and idx_repeat_block < len(row) else ""
 
-            if reason in {"english_below_b1", "low_english"}:
+            if reason in {"english_below_a2", "low_english", "age_below_21"}:
                 return True
             if blocked in {"yes", "да", "true", "1"}:
                 return True
@@ -1406,7 +1406,7 @@ CONDITIONS_TEXT = """\
 💵 *Ставка:* 20% от тотала + 2% за выполнение плана
 📅 *Выплаты:* каждый вторник
 🔐 *Формат:* криптокошелёк
-🌐 *Английский:* обязателен от уровня A2
+🌐 *Английский:* обязателен от уровня A2+
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🔥 *БОНУСНАЯ СИСТЕМА*
@@ -1488,7 +1488,7 @@ FAQ_TEXT = """\
 Персональный контент для конкретного фана — один из главных источников дохода оператора.
 
 ▸ *Нужно ли знать английский?*
-Да, обязательно от уровня A2. Чем выше уровень — тем более топовые страницы доступны.
+Да, обязательно от уровня A2+. Чем выше уровень — тем более топовые страницы доступны.
 
 ▸ *Что если не пройду тест-смену?*
 Разбираем ситуацию индивидуально. Мы не бросаем.\
@@ -1722,7 +1722,7 @@ async def notify_hr(context: ContextTypes.DEFAULT_TYPE, data: dict):
 
 
 async def notify_hr_low_english_rejection(context: ContextTypes.DEFAULT_TYPE, data: dict):
-    """Отправляет HR уведомление об авто-отказе по уровню английского ниже B1."""
+    """Отправляет HR уведомление об авто-отказе по уровню английского ниже A2."""
     if not HR_CHAT_ID:
         logger.warning("HR_CHAT_ID не задан — уведомление о низком английском не отправлено.")
         return
@@ -1731,13 +1731,13 @@ async def notify_hr_low_english_rejection(context: ContextTypes.DEFAULT_TYPE, da
         return str(val).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
 
     text = (
-        "🚫 *Авто-отказ по английскому (ниже B1)*\n\n"
+        "🚫 *Авто-отказ по английскому (ниже A2)*\n\n"
         f"*Уровень английского:* {e(data.get('english', '—'))}\n"
         f"*Имя:* {e(data.get('name', '—'))}\n"
         f"*Тг:* @{e(data.get('username', '—'))} ({e(data.get('user_id', '—'))})\n"
         f"*Возраст:* {e(data.get('age', '—'))}\n"
         f"*Источник:* {e(data.get('source', '—'))}\n"
-        "*Причина:* минимальный порог вакансии B1+"
+        "*Причина:* минимальный порог вакансии A2+"
     )
     try:
         await context.bot.send_message(chat_id=HR_CHAT_ID, text=text, parse_mode="Markdown")
@@ -2153,9 +2153,20 @@ async def q3_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return Q3_AGE
     age = int(text)
-    if age < 18:
+    if age < 21:
+        context.user_data["user_id"] = update.effective_user.id
+        context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
+        track_dropoff(context, "age_below_21")
+        cancel_form_reminders(context, update.effective_user.id)
+        context.user_data["form_active"] = False
+        save_rejection(
+            context.user_data,
+            reason="age_below_21",
+            repeat_block=True,
+            comment="Минимальный возраст: 21 год",
+        )
         await update.message.reply_text(
-            "🔞 *К сожалению, мы берём на работу только с 18 лет.*\n\nЕсли есть вопросы — используйте меню ниже.",
+            "🔞 *К сожалению, мы принимаем кандидатов только с 21 года.*\n\nПриходи позже! 😊",
             parse_mode="Markdown", reply_markup=main_keyboard(),
         )
         return ConversationHandler.END
@@ -2321,18 +2332,18 @@ async def q5_english_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     level = q.data.replace("eng_", "")
     context.user_data["english"] = level
 
-    if level in {"A1", "A2"}:
+    if level in {"A1"}:
         await q.edit_message_text(f"🌐 Английский: *{level}*", parse_mode="Markdown")
         context.user_data["user_id"] = update.effective_user.id
         context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
-        track_dropoff(context, "english_below_b1")
+        track_dropoff(context, "english_below_a2")
         cancel_form_reminders(context, update.effective_user.id)
         context.user_data["form_active"] = False
         save_rejection(
             context.user_data,
-            reason="english_below_b1",
+            reason="english_below_a2",
             repeat_block=True,
-            comment="Минимальный порог для вакансии: B1+",
+            comment="Минимальный порог для вакансии: A2+",
         )
         await notify_hr_low_english_rejection(context, context.user_data)
         await q.message.reply_text(
