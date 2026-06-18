@@ -797,7 +797,7 @@ def is_form_blocked_for_user(user_id: int) -> bool:
             reason = row[idx_reason].strip().lower() if idx_reason != -1 and idx_reason < len(row) else ""
             blocked = row[idx_repeat_block].strip().lower() if idx_repeat_block != -1 and idx_repeat_block < len(row) else ""
 
-            if reason in {"english_below_a2", "low_english", "age_below_21"}:
+            if reason in {"english_below_a2", "low_english", "age_below_21", "age_below_18"}:
                 return True
             if blocked in {"yes", "да", "true", "1"}:
                 return True
@@ -2153,20 +2153,20 @@ async def q3_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return Q3_AGE
     age = int(text)
-    if age < 21:
+    if age < 18:
         context.user_data["user_id"] = update.effective_user.id
         context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
-        track_dropoff(context, "age_below_21")
+        track_dropoff(context, "age_below_18")
         cancel_form_reminders(context, update.effective_user.id)
         context.user_data["form_active"] = False
         save_rejection(
             context.user_data,
-            reason="age_below_21",
+            reason="age_below_18",
             repeat_block=True,
-            comment="Минимальный возраст: 21 год",
+            comment="Минимальный возраст: 18 лет",
         )
         await update.message.reply_text(
-            "🔞 *К сожалению, мы принимаем кандидатов только с 21 года.*\n\nПриходи позже! 😊",
+            "🔞 *К сожалению, мы принимаем кандидатов только с 18 лет.*\n\nПриходи позже! 😊",
             parse_mode="Markdown", reply_markup=main_keyboard(),
         )
         return ConversationHandler.END
