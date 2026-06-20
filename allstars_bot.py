@@ -405,9 +405,9 @@ def _bootstrap_analytics_from_sheets() -> None:
 
     try:
         with _analytics_conn() as conn:
-            cursor = conn.execute("SELECT COUNT(*) AS count FROM analytics_events")
-            existing_count = int(cursor.fetchone()["count"])
-            if existing_count > 0:
+            cursor = conn.execute("SELECT COUNT(*) AS count FROM analytics_events WHERE source = ?", ("bootstrap",))
+            bootstrapped_count = int(cursor.fetchone()["count"])
+            if bootstrapped_count > 0:
                 _analytics_bootstrapped = True
                 return
 
@@ -441,6 +441,18 @@ def _bootstrap_analytics_from_sheets() -> None:
                     if not key:
                         continue
 
+                    created_at_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    duplicate = conn.execute(
+                        """
+                        SELECT 1 FROM analytics_events
+                        WHERE event_type = ? AND tg_id = ? AND created_at = ?
+                        LIMIT 1
+                        """,
+                        (event_type, key, created_at_str),
+                    ).fetchone()
+                    if duplicate:
+                        continue
+
                     conn.execute(
                         """
                         INSERT INTO analytics_events (
@@ -452,7 +464,7 @@ def _bootstrap_analytics_from_sheets() -> None:
                             key,
                             str(row[idx_username]).strip().lstrip("@") if idx_username < len(row) else "",
                             str(row[idx_name]).strip() if idx_name < len(row) else "",
-                            dt.strftime("%Y-%m-%d %H:%M:%S"),
+                            created_at_str,
                             dt.astimezone(MSK_TZ).strftime("%Y-%m-%d"),
                             "bootstrap",
                         ),
@@ -471,17 +483,17 @@ def _bootstrap_analytics_from_sheets() -> None:
 def _analytics_stats(period_start: datetime | None, period_end: datetime | None) -> dict[str, int]:
     _bootstrap_analytics_from_sheets()
 
-    start_key = period_start.strftime("%Y-%m-%d") if period_start else None
-    end_key = period_end.strftime("%Y-%m-%d") if period_end else None
+    start_ts = period_start.astimezone(MSK_TZ).strftime("%Y-%m-%d %H:%M:%S") if period_start else None
+    end_ts = period_end.astimezone(MSK_TZ).strftime("%Y-%m-%d %H:%M:%S") if period_end else None
 
     def distinct_users(event_types: tuple[str, ...]) -> set[str]:
         query = "SELECT DISTINCT tg_id FROM analytics_events WHERE event_type IN ({})".format(
             ",".join("?" for _ in event_types)
         )
         params: list[str] = list(event_types)
-        if start_key and end_key:
-            query += " AND period_key >= ? AND period_key < ?"
-            params.extend([start_key, end_key])
+        if start_ts and end_ts:
+            query += " AND created_at >= ? AND created_at < ?"
+            params.extend([start_ts, end_ts])
 
         with _analytics_conn() as conn:
             rows = conn.execute(query, params).fetchall()
@@ -2159,6 +2171,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
     if update.effective_user:
+        _record_analytics_event(
+            "start",
+            user_id=update.effective_user.id,
+            username=update.effective_user.username or "",
+            full_name=update.effective_user.full_name or "",
+            source="bot_start",
+        )
+
         if register_start_event(update.effective_user):
             logger.info(f"Start event registered from /start: user_id={update.effective_user.id}")
 
