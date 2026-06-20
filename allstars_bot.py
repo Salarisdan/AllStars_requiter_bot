@@ -386,7 +386,13 @@ def _parse_saved_datetime(value: str) -> datetime | None:
     if not value:
         return None
 
-    for fmt in ("%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M"):
+    for fmt in (
+        "%d.%m.%Y %H:%M",
+        "%d.%m.%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ):
         try:
             return datetime.strptime(value, fmt).replace(tzinfo=MSK_TZ)
         except ValueError:
@@ -609,10 +615,6 @@ def _parse_period_args(args: list[str]) -> tuple[datetime | None, datetime | Non
 
     token = (args[0] or "").strip().casefold()
 
-    # Support two-word alias: "прошлая неделя"
-    if token == "прошлая" and len(args) >= 2 and (args[1] or "").strip().casefold() == "неделя":
-        token = "прошлая_неделя"
-
     if token in {"all", "все", "всё"}:
         return None, None, "за всё время"
 
@@ -636,8 +638,8 @@ def _parse_period_args(args: list[str]) -> tuple[datetime | None, datetime | Non
         start = end - timedelta(days=1)
         return start, end, f"вчера: {start.strftime('%d.%m.%Y')}"
 
-    # /stats range|period|период 2026-06-01 2026-06-07
-    if token in {"range", "period", "период"}:
+    # /stats range 2026-06-01 2026-06-07
+    if token == "range":
         if len(args) < 3:
             raise ValueError("Использование: /stats range YYYY-MM-DD YYYY-MM-DD")
         try:
@@ -651,7 +653,7 @@ def _parse_period_args(args: list[str]) -> tuple[datetime | None, datetime | Non
         return start, end, f"период: {start.strftime('%d.%m.%Y')} - {end_inclusive.strftime('%d.%m.%Y')}"
 
     raise ValueError(
-        "Неизвестный период. Используйте: week/неделя, prev_week/прошлая неделя, day/сегодня, yesterday/вчера, all, range/период YYYY-MM-DD YYYY-MM-DD"
+        "Неизвестный период. Используйте: week, prev_week, day, yesterday, all, range YYYY-MM-DD YYYY-MM-DD"
     )
 
 
@@ -669,8 +671,21 @@ def build_start_and_refusal_stats_text(
     period_label: str = "за всё время",
 ) -> str:
     """Статистика по уникальным /start и отказам от анкеты."""
-    leads_rows = get_leads_sheet().get_all_values()
-    rejection_rows = get_rejections_sheet().get_all_values()
+    warnings: list[str] = []
+
+    try:
+        leads_rows = get_leads_sheet().get_all_values()
+    except Exception as e:
+        logger.error(f"Leads read error in common stats: {type(e).__name__}: {e}", exc_info=True)
+        leads_rows = []
+        warnings.append("не удалось прочитать лист Лиды")
+
+    try:
+        rejection_rows = get_rejections_sheet().get_all_values()
+    except Exception as e:
+        logger.error(f"Rejections read error in common stats: {type(e).__name__}: {e}", exc_info=True)
+        rejection_rows = []
+        warnings.append("не удалось прочитать лист Отказы")
 
     start_users: set[str] = set()
     refusal_users: set[str] = set()
@@ -734,6 +749,12 @@ def build_start_and_refusal_stats_text(
         for reason, count in sorted(refusal_reasons.items(), key=lambda item: (-item[1], item[0])):
             lines.append(f"- {reason}: {count}")
 
+    if warnings:
+        lines.append("")
+        lines.append("⚠️ Замечание:")
+        for item in warnings:
+            lines.append(f"- {item}")
+
     return "\n".join(lines)
 
 
@@ -742,7 +763,12 @@ def build_refusals_stats_text(
     period_end: datetime | None = None,
     period_label: str = "за всё время",
 ) -> str:
-    rows = get_rejections_sheet().get_all_values()
+    try:
+        rows = get_rejections_sheet().get_all_values()
+    except Exception as e:
+        logger.error(f"Refusals read error: {type(e).__name__}: {e}", exc_info=True)
+        return "📉 Отказы\n\nНе удалось прочитать лист Отказы. Проверьте доступ/ID таблицы."
+
     if not rows or len(rows) == 1:
         return "📉 Отказы\n\nПока нет данных."
 
@@ -941,7 +967,7 @@ def get_rejections_sheet():
             return _gs_rejections
         # Убеждаемся что основной клиент подключён
         get_sheet()
-        spreadsheet = _gs_client.open(SPREADSHEET_NAME)
+        spreadsheet = open_spreadsheet(_gs_client)
         # Ищем лист "Отказы"
         try:
             _gs_rejections = spreadsheet.worksheet("Отказы")
@@ -3232,13 +3258,9 @@ async def common_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ {e}\n\n"
             "Примеры:\n"
             "/stats week\n"
-            "/stats неделя\n"
             "/stats prev_week\n"
-            "/stats прошлая неделя\n"
             "/stats day\n"
-            "/stats сегодня\n"
             "/stats all\n"
-            "/stats период 2026-06-01 2026-06-07\n"
             "/stats range 2026-06-01 2026-06-07"
         )
     except Exception as e:
@@ -3260,13 +3282,9 @@ async def refusals_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ {e}\n\n"
             "Примеры:\n"
             "/refusals week\n"
-            "/refusals неделя\n"
             "/refusals prev_week\n"
-            "/refusals прошлая неделя\n"
             "/refusals day\n"
-            "/refusals сегодня\n"
             "/refusals all\n"
-            "/refusals период 2026-06-01 2026-06-07\n"
             "/refusals range 2026-06-01 2026-06-07"
         )
     except Exception as e:
