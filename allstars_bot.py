@@ -716,16 +716,20 @@ def _row_user_key(row: list[str], idx_tg_id: int, idx_username: int) -> str:
     return tg_id or (f"@{username}" if username else "")
 
 
-def _collect_submitted_users(period_start: datetime | None, period_end: datetime | None) -> set[str]:
-    """Собирает уникальных пользователей, которые дошли до конца анкеты или листа ожидания."""
-    submitted: set[str] = set()
+def _collect_submission_sets(
+    period_start: datetime | None,
+    period_end: datetime | None,
+) -> tuple[set[str], set[str], set[str]]:
+    """Собирает пользователей с завершённой заявкой: основная анкета, ожидание и объединение."""
+    main_submissions: set[str] = set()
+    waitlist_submissions: set[str] = set()
 
     sources = (
-        (get_main_worksheet, "allstars"),
-        (get_waitlist_sheet, "waitlist"),
+        (get_main_worksheet, "allstars", main_submissions),
+        (get_waitlist_sheet, "waitlist", waitlist_submissions),
     )
 
-    for sheet_getter, _label in sources:
+    for sheet_getter, _label, target in sources:
         try:
             rows = sheet_getter().get_all_values()
         except Exception as e:
@@ -749,9 +753,9 @@ def _collect_submitted_users(period_start: datetime | None, period_end: datetime
 
             key = _row_user_key(row, idx_tg_id, idx_username)
             if key:
-                submitted.add(key)
+                target.add(key)
 
-    return submitted
+    return main_submissions, waitlist_submissions, main_submissions | waitlist_submissions
 
 
 def build_start_and_refusal_stats_text(
@@ -786,7 +790,7 @@ def build_start_and_refusal_stats_text(
             if key:
                 start_users.add(key)
 
-    submitted_users = _collect_submitted_users(period_start, period_end)
+    main_submissions, waitlist_submissions, submitted_users = _collect_submission_sets(period_start, period_end)
     refused_users = start_users - submitted_users
 
     lines = [
@@ -794,7 +798,9 @@ def build_start_and_refusal_stats_text(
         "",
         f"Период: {period_label}",
         f"Пользователей с /start: {len(start_users)}",
-        f"Пользователей, оставивших заявку: {len(submitted_users)}",
+        f"Прошли анкету полностью: {len(submitted_users)}",
+        f"  • Основная заявка: {len(main_submissions)}",
+        f"  • Лист ожидания: {len(waitlist_submissions)}",
         f"Пользователей, не дошедших до заявки: {len(refused_users)}",
     ]
 
@@ -832,7 +838,7 @@ def build_refusals_stats_text(
         if key:
             start_users.add(key)
 
-    submitted_users = _collect_submitted_users(period_start, period_end)
+    main_submissions, waitlist_submissions, submitted_users = _collect_submission_sets(period_start, period_end)
     dropped_off_users = start_users - submitted_users
 
     lines = [
@@ -840,7 +846,9 @@ def build_refusals_stats_text(
         "",
         f"Период: {period_label}",
         f"Пользователей с /start: {len(start_users)}",
-        f"Пользователей, оставивших заявку: {len(submitted_users)}",
+        f"Прошли анкету полностью: {len(submitted_users)}",
+        f"  • Основная заявка: {len(main_submissions)}",
+        f"  • Лист ожидания: {len(waitlist_submissions)}",
         f"Пользователей, не дошедших до анкеты: {len(dropped_off_users)}",
     ]
 
