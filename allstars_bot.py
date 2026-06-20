@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import base64
 import json
 import logging
@@ -593,6 +593,201 @@ def build_funnel_stats_text() -> str:
         "- /funnel_add <tg_id> <этап>",
         "- /funnel_add @username <этап>",
     ])
+    return "\n".join(lines)
+
+
+def _week_start_sunday(dt: datetime) -> datetime:
+    days_since_sunday = (dt.weekday() + 1) % 7
+    base = dt - timedelta(days=days_since_sunday)
+    return base.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _parse_period_args(args: list[str]) -> tuple[datetime | None, datetime | None, str]:
+    now_msk = datetime.now(MSK_TZ)
+    if not args:
+        return None, None, "за всё время"
+
+    token = (args[0] or "").strip().casefold()
+
+    # Support two-word alias: "прошлая неделя"
+    if token == "прошлая" and len(args) >= 2 and (args[1] or "").strip().casefold() == "неделя":
+        token = "прошлая_неделя"
+
+    if token in {"all", "все", "всё"}:
+        return None, None, "за всё время"
+
+    if token in {"week", "неделя"}:
+        start = _week_start_sunday(now_msk)
+        end = start + timedelta(days=7)
+        return start, end, f"неделя (вс-вс): {start.strftime('%d.%m')} - {end.strftime('%d.%m')}"
+
+    if token in {"prev_week", "прошлая_неделя", "прошланеделя"}:
+        end = _week_start_sunday(now_msk)
+        start = end - timedelta(days=7)
+        return start, end, f"прошлая неделя (вс-вс): {start.strftime('%d.%m')} - {end.strftime('%d.%m')}"
+
+    if token in {"day", "today", "сегодня"}:
+        start = now_msk.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+        return start, end, f"сегодня: {start.strftime('%d.%m.%Y')}"
+
+    if token in {"yesterday", "вчера"}:
+        end = now_msk.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = end - timedelta(days=1)
+        return start, end, f"вчера: {start.strftime('%d.%m.%Y')}"
+
+    # /stats range|period|период 2026-06-01 2026-06-07
+    if token in {"range", "period", "период"}:
+        if len(args) < 3:
+            raise ValueError("Использование: /stats range YYYY-MM-DD YYYY-MM-DD")
+        try:
+            start = datetime.strptime(args[1], "%Y-%m-%d").replace(tzinfo=MSK_TZ)
+            end_inclusive = datetime.strptime(args[2], "%Y-%m-%d").replace(tzinfo=MSK_TZ)
+        except ValueError:
+            raise ValueError("Дата должна быть в формате YYYY-MM-DD")
+        if end_inclusive < start:
+            raise ValueError("Конечная дата не может быть раньше начальной")
+        end = end_inclusive + timedelta(days=1)
+        return start, end, f"период: {start.strftime('%d.%m.%Y')} - {end_inclusive.strftime('%d.%m.%Y')}"
+
+    raise ValueError(
+        "Неизвестный период. Используйте: week/неделя, prev_week/прошлая неделя, day/сегодня, yesterday/вчера, all, range/период YYYY-MM-DD YYYY-MM-DD"
+    )
+
+
+def _in_period(dt: datetime, start: datetime | None, end: datetime | None) -> bool:
+    if start and dt < start:
+        return False
+    if end and dt >= end:
+        return False
+    return True
+
+
+def build_start_and_refusal_stats_text(
+    period_start: datetime | None = None,
+    period_end: datetime | None = None,
+    period_label: str = "за всё время",
+) -> str:
+    """Статистика по уникальным /start и отказам от анкеты."""
+    leads_rows = get_leads_sheet().get_all_values()
+    rejection_rows = get_rejections_sheet().get_all_values()
+
+    start_users: set[str] = set()
+    refusal_users: set[str] = set()
+    refusal_reasons: dict[str, int] = defaultdict(int)
+
+    if leads_rows:
+        lead_headers = leads_rows[0]
+        idx_lead_date = lead_headers.index("Дата") if "Дата" in lead_headers else 0
+        idx_lead_tg_id = lead_headers.index("TG ID") if "TG ID" in lead_headers else 2
+        idx_lead_username = lead_headers.index("TG Username") if "TG Username" in lead_headers else 1
+
+        for row in leads_rows[1:]:
+            if idx_lead_date >= len(row):
+                continue
+            dt = _parse_saved_datetime(row[idx_lead_date])
+            if not dt or not _in_period(dt, period_start, period_end):
+                continue
+
+            tg_id = row[idx_lead_tg_id].strip() if idx_lead_tg_id < len(row) else ""
+            username = row[idx_lead_username].strip().lstrip("@").casefold() if idx_lead_username < len(row) else ""
+            key = tg_id or (f"@{username}" if username else "")
+            if key:
+                start_users.add(key)
+
+    if rejection_rows:
+        rej_headers = rejection_rows[0]
+        idx_rej_date = rej_headers.index("Дата") if "Дата" in rej_headers else 0
+        idx_rej_tg_id = rej_headers.index("TG ID") if "TG ID" in rej_headers else 2
+        idx_rej_username = rej_headers.index("TG Username") if "TG Username" in rej_headers else 1
+        idx_rej_reason = rej_headers.index("Причина отказа") if "Причина отказа" in rej_headers else 6
+
+        for row in rejection_rows[1:]:
+            if idx_rej_date >= len(row):
+                continue
+            dt = _parse_saved_datetime(row[idx_rej_date])
+            if not dt or not _in_period(dt, period_start, period_end):
+                continue
+
+            tg_id = row[idx_rej_tg_id].strip() if idx_rej_tg_id < len(row) else ""
+            username = row[idx_rej_username].strip().lstrip("@").casefold() if idx_rej_username < len(row) else ""
+            reason = row[idx_rej_reason].strip() if idx_rej_reason < len(row) else ""
+
+            key = tg_id or (f"@{username}" if username else "")
+            if key:
+                refusal_users.add(key)
+
+            if reason:
+                refusal_reasons[reason] += 1
+
+    lines = [
+        "📊 Статистика кандидатов",
+        "",
+        f"Период: {period_label}",
+        f"Пользователей с /start: {len(start_users)}",
+        f"Пользователей, отказавшихся от анкеты: {len(refusal_users)}",
+    ]
+
+    if refusal_reasons:
+        lines.append("")
+        lines.append("Причины отказа (события):")
+        for reason, count in sorted(refusal_reasons.items(), key=lambda item: (-item[1], item[0])):
+            lines.append(f"- {reason}: {count}")
+
+    return "\n".join(lines)
+
+
+def build_refusals_stats_text(
+    period_start: datetime | None = None,
+    period_end: datetime | None = None,
+    period_label: str = "за всё время",
+) -> str:
+    rows = get_rejections_sheet().get_all_values()
+    if not rows or len(rows) == 1:
+        return "📉 Отказы\n\nПока нет данных."
+
+    headers = rows[0]
+    idx_date = headers.index("Дата") if "Дата" in headers else 0
+    idx_tg_id = headers.index("TG ID") if "TG ID" in headers else 2
+    idx_username = headers.index("TG Username") if "TG Username" in headers else 1
+    idx_reason = headers.index("Причина отказа") if "Причина отказа" in headers else 6
+
+    unique_users: set[str] = set()
+    reason_counts: dict[str, int] = defaultdict(int)
+    event_count = 0
+
+    for row in rows[1:]:
+        if idx_date >= len(row):
+            continue
+        dt = _parse_saved_datetime(row[idx_date])
+        if not dt or not _in_period(dt, period_start, period_end):
+            continue
+
+        event_count += 1
+        tg_id = row[idx_tg_id].strip() if idx_tg_id < len(row) else ""
+        username = row[idx_username].strip().lstrip("@").casefold() if idx_username < len(row) else ""
+        reason = row[idx_reason].strip() if idx_reason < len(row) else "(без причины)"
+
+        key = tg_id or (f"@{username}" if username else "")
+        if key:
+            unique_users.add(key)
+
+        reason_counts[reason] += 1
+
+    lines = [
+        "📉 Статистика отказов",
+        "",
+        f"Период: {period_label}",
+        f"Уникальных пользователей: {len(unique_users)}",
+        f"Всего событий отказа: {event_count}",
+    ]
+
+    if reason_counts:
+        lines.append("")
+        lines.append("Причины:")
+        for reason, count in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0])):
+            lines.append(f"- {reason}: {count}")
+
     return "\n".join(lines)
 
 
@@ -2705,13 +2900,13 @@ async def q17_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text == "❌ Отменить заполнение":
+    if update.message.text == "? �������� ����������":
         return await cancel(update, context)
 
     email = update.message.text.strip().lower()
     if not is_valid_gmail(email):
         await update.message.reply_text(
-            "Укажите корректный Gmail в формате `example@gmail.com`.",
+            "������� ���������� Gmail � ������� `example@gmail.com`.",
             parse_mode="Markdown",
             reply_markup=cancel_keyboard(),
         )
@@ -2731,81 +2926,47 @@ async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not has_open:
         shift_names = {
-            "00-06": "🌙 00:00–06:00", "06-12": "🌅 06:00–12:00",
-            "12-18": "☀️ 12:00–18:00", "18-00": "🌆 18:00–00:00",
+            "00-06": "?? 00:00�06:00", "06-12": "?? 06:00�12:00",
+            "12-18": "?? 12:00�18:00", "18-00": "?? 18:00�00:00",
         }
         platform = context.user_data.get("platform", "")
-        open_list = " · ".join(shift_names[s] for s in open_shifts) if open_shifts else "пока нет открытых смен"
+        open_list = " � ".join(shift_names[s] for s in open_shifts) if open_shifts else "���� ��� �������� ����"
 
         await update.message.chat.send_action(ChatAction.TYPING)
         await asyncio.sleep(1.0)
         await update.message.reply_text(
-            "╔══════════════════════════════╗\n"
-            "║   ⏳  СМЕНЫ ПЕРЕПОЛНЕНЫ     ║\n"
-            "╚══════════════════════════════╝\n\n"
-            f"Анкета заполнена отлично! Но выбранные смены сейчас *закрыты для набора* на *{platform}*.\n\n"
-            f"🟢 *Сейчас открыт набор на:* {open_list}\n\n"
-            "Мы можем добавить тебя в *лист ожидания* — как только смена откроется, HR-менеджер напишет тебе лично.\n\n"
-            "*Хочешь попасть в лист ожидания?*",
+            "�==============================�\n"
+            "�   ?  ����� �����������     �\n"
+            "L==============================-\n\n"
+            f"������ ��������� �������! �� ��������� ����� ������ *������� ��� ������* �� *{platform}*.\n\n"
+            f"?? *������ ������ ����� ��:* {open_list}\n\n"
+            "�� ����� �������� ���� � *���� ��������* � ��� ������ ����� ���������, HR-�������� ������� ���� �����.\n\n"
+            "*������ ������� � ���� ��������?*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Да, добавьте меня", callback_data="waitlist_yes")],
-                [InlineKeyboardButton("❌ Нет, спасибо", callback_data="waitlist_no")],
+                [InlineKeyboardButton("? ��, ��������", callback_data="waitlist_yes")],
+                [InlineKeyboardButton("? ���, �������", callback_data="waitlist_no")],
             ]),
         )
         return Q_WAITLIST
 
-    saved = save_to_sheet(context.user_data)
-
-    if saved:
-        await notify_hr(context, context.user_data)
-        d = context.user_data
-        card = (
-            f"{progress(FORM_TOTAL_QUESTIONS, FORM_TOTAL_QUESTIONS)}\n\n"
-            "╔══════════════════════════════╗\n"
-            "║     ✅  АНКЕТА ОТПРАВЛЕНА!  ║\n"
-            "╚══════════════════════════════╝\n\n"
-            f"👤 *Имя:* {d.get('name', '—')}\n"
-            f"🎂 *Возраст:* {d.get('age', '—')}\n"
-            "\n🧠 *Психо-блок (вопрос -> ответ):*\n"
-            f"1) Классный рабочий день: {d.get('psych_feedback', '—')}\n"
-            f"2) Мечта: {d.get('psych_low_result', '—')}\n"
-            f"3) Крутой ТимЛид: {d.get('psych_kpi_fail', '—')}\n"
-            f"🌐 *Английский:* {d.get('english', '—')}\n"
-            f"📱 *Платформа:* {d.get('platform', '—')}\n"
-            f"🕐 *Смены:* {d.get('shifts', '—')}\n"
-            f"🎯 *Скрининг:* {d.get('screening', '—')}\n"
-            f"🏷 *Автотег:* {d.get('auto_tag', '—')}\n"
-            f"💼 *Стаж:* {d.get('experience', '—')}\n"
-            f"📊 *Топ страниц:* {d.get('top_pages', '—')}\n"
-            f"📈 *Конверсия:* {d.get('conversion', '—')}\n"
-            f"👤 *Типаж моделей:* {d.get('model_types', '—')}\n"
-            f"🌐 *Платформы (опыт):* {d.get('worked_platforms', '—')}\n"
-            f"💵 *Ср чек:* {d.get('avg_check', '—')}\n"
-            f"📤 *Причина ухода с прошлого места работы:* {d.get('leave_reason', '—')}\n"
-            f"📚 *Основная деятельность/учеба:* {d.get('main_activity', '—')}\n"
-            f"📅 *График:* {d.get('work_schedule', '—')}\n"
-            f"💸 *Финансовые ожидания:* {d.get('financial_expectations', '—')}\n"
-            f"✉️ *Mail:* {d.get('email', '—')}\n"
-            f"🪪 *Верификация:* {d.get('verification', '—')}\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "1) Проверка анкеты\n"
-            "2) Контакт HR\n"
-            "3) Тест-смена\n\n"
-            "⏱ HR пишет обычно в течение *1 часа*.\n\n"
-            "*FAQ кратко:* выплаты - каждый вторник, NDA обязателен, верификация после тест-смены.\n\n"
-            "_Пока ждёшь — изучи раздел «🏢 Об агентстве» и «💰 Условия работы» 👇_"
-        )
-        await update.message.chat.send_action(ChatAction.TYPING)
-        await asyncio.sleep(1.0)
-        await update.message.reply_text(card, parse_mode="Markdown", reply_markup=main_keyboard())
-    else:
+    if not save_to_sheet(context.user_data):
         await update.message.reply_text(
-            "⚠️ *Произошла техническая ошибка при сохранении данных.*\n\n"
-            "Пожалуйста, попробуйте заполнить анкету ещё раз через несколько минут.",
-            parse_mode="Markdown",
+            "?? �� ������� ��������� ������. ���������� ���� �����.",
             reply_markup=main_keyboard(),
         )
+        return ConversationHandler.END
+
+    await notify_hr(context, context.user_data)
+
+    await update.message.chat.send_action(ChatAction.TYPING)
+    await asyncio.sleep(1.0)
+    await update.message.reply_text(
+        "? *������ ����������!*\n\n"
+        "������� �� ������. HR-�������� �������� � ���� � Telegram ����� ��������.",
+        parse_mode="Markdown",
+        reply_markup=main_keyboard(),
+    )
     return ConversationHandler.END
 
 
@@ -2832,19 +2993,19 @@ async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if q.data == "nda_more":
         await q.message.reply_text(
-            "📖 *Подробно про верификацию и NDA:*\n\n"
-            "1) Верификация только после тест-смены\n"
-            "2) Подходит паспорт/ID/права/ВНЖ\n"
-            "3) Данные не публикуются и защищены договором\n"
-            "4) Это обязательный стандарт безопасности в агентстве",
+            "?? *�������� ��� ����������� � NDA:*\n\n"
+            "1) ����������� ������ ����� ����-�����\n"
+            "2) �������� �������/ID/�����/���\n"
+            "3) ������ �� ����������� � �������� ���������\n"
+            "4) ��� ������������ �������� ������������ � ���������",
             parse_mode="Markdown",
         )
         return Q18_VERIFICATION
 
     if q.data == "verif_no":
-        await _edit_or_reply_verification_status("🪪 Верификация: *❌ Нет*")
-        context.user_data["verification"] = "❌ Нет"
-        context.user_data["user_id"]  = update.effective_user.id
+        await _edit_or_reply_verification_status("?? �����������: *? ���*")
+        context.user_data["verification"] = "? ���"
+        context.user_data["user_id"] = update.effective_user.id
         context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
         track_dropoff(context, f"verification_declined_at_{context.user_data.get('current_step', 'unknown')}")
         cancel_form_reminders(context, update.effective_user.id)
@@ -2853,36 +3014,35 @@ async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         await q.message.chat.send_action(ChatAction.TYPING)
         await asyncio.sleep(1.2)
         await q.message.reply_text(
-            "╔══════════════════════════════╗\n"
-            "║   😔  ЗАЯВКА ОТКЛОНЕНА     ║\n"
-            "╚══════════════════════════════╝\n\n"
-            "К сожалению, верификация личности является *обязательным условием* для работы в Allstars.\n\n"
-            "Это не прихоть — это стандарт безопасности, который защищает как моделей, так и всю команду.\n\n"
-            "Без верификации мы не можем допустить оператора к работе с реальными страницами и данными.\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "_Если ты передумаешь — всегда можешь вернуться и заполнить анкету заново. Мы будем рады видеть тебя в команде! 🤝_",
+            "�==============================�\n"
+            "�   ??  ������ ���������     �\n"
+            "L==============================-\n\n"
+            "� ���������, ����������� �������� �������� *������������ ��������* ��� ������ � Allstars.\n\n"
+            "��� �� ������� � ��� �������� ������������, ������� �������� ��� �������, ��� � ��� �������.\n\n"
+            "��� ����������� �� �� ����� ��������� ��������� � ������ � ��������� ���������� � �������.\n\n"
+            "????????????????????????????\n"
+            "_���� �� ����������� � ������ ������ ��������� � ��������� ������ ������. �� ����� ���� ������ ���� � �������! ??_",
             parse_mode="Markdown",
             reply_markup=main_keyboard(),
         )
         return ConversationHandler.END
 
-    # Верификация — Да, продолжаем анкету
-    context.user_data["verification"] = "✅ Да"
-    await _edit_or_reply_verification_status("🪪 Верификация: *✅ Да*")
+    # ����������� � ��, ���������� ������
+    context.user_data["verification"] = "? ��"
+    await _edit_or_reply_verification_status("?? �����������: *? ��*")
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q1_SOURCE")
     await q.message.reply_text(
-        "Отлично! Теперь давай ответим на пару вопросов.",
+        "�������! ������ ����� ������� �� ���� ��������.",
         reply_markup=source_keyboard(),
     )
     await q.message.reply_text(
-        f"{question_header(1, FORM_TOTAL_QUESTIONS)}*Вопрос 2 из 21:*\n"
-        "Откуда вы о нас узнали?\n\n"
-        "_Напишите своими словами: например, «от друга @username», «реклама в Telegram», «сам нашёл» и т.д._",
+        f"{question_header(1, FORM_TOTAL_QUESTIONS)}*������ 2 �� 21:*\n"
+        "������ �� � ��� ������?\n\n"
+        "_�������� ������ �������: ��������, ��� ����� @username�, �������� � Telegram�, ���� ����� � �.�._",
         parse_mode="Markdown",
         reply_markup=source_keyboard(),
     )
     return Q1_SOURCE
-
 
 async def q18_verification_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
@@ -3019,6 +3179,23 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     step = context.user_data.get("current_step", "unknown")
     track_dropoff(context, f"cancel_at_{step}")
     cancel_form_reminders(context, update.effective_user.id)
+
+    rejection_payload = {
+        "user_id": update.effective_user.id if update.effective_user else "",
+        "username": (update.effective_user.username if update.effective_user else "")
+        or (update.effective_user.full_name if update.effective_user else ""),
+        "name": context.user_data.get("name", ""),
+        "age": context.user_data.get("age", ""),
+        "source": context.user_data.get("source", ""),
+        "english": context.user_data.get("english", ""),
+    }
+    save_rejection(
+        rejection_payload,
+        reason=f"cancel_at_{step}",
+        repeat_block=False,
+        comment="Пользователь отменил заполнение анкеты",
+    )
+
     context.user_data.clear()
     await update.message.reply_text(
         "❌ *Заполнение анкеты отменено.*\n\nВы можете вернуться в любое время — нажмите «📝 Заполнить анкету».",
@@ -3039,6 +3216,62 @@ async def leads_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Leads stats error: {type(e).__name__}: {e}", exc_info=True)
         await update.message.reply_text("Не удалось получить статистику лидов. Попробуйте позже.")
+
+
+async def common_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_stats_allowed(update):
+        await update.message.reply_text("⛔ Команда доступна только HR/админу.")
+        return
+
+    try:
+        period_start, period_end, period_label = _parse_period_args(context.args or [])
+        text = build_start_and_refusal_stats_text(period_start, period_end, period_label)
+        await update.message.reply_text(text)
+    except ValueError as e:
+        await update.message.reply_text(
+            f"⚠️ {e}\n\n"
+            "Примеры:\n"
+            "/stats week\n"
+            "/stats неделя\n"
+            "/stats prev_week\n"
+            "/stats прошлая неделя\n"
+            "/stats day\n"
+            "/stats сегодня\n"
+            "/stats all\n"
+            "/stats период 2026-06-01 2026-06-07\n"
+            "/stats range 2026-06-01 2026-06-07"
+        )
+    except Exception as e:
+        logger.error(f"Common stats error: {type(e).__name__}: {e}", exc_info=True)
+        await update.message.reply_text("Не удалось получить общую статистику. Попробуйте позже.")
+
+
+async def refusals_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_stats_allowed(update):
+        await update.message.reply_text("⛔ Команда доступна только HR/админу.")
+        return
+
+    try:
+        period_start, period_end, period_label = _parse_period_args(context.args or [])
+        text = build_refusals_stats_text(period_start, period_end, period_label)
+        await update.message.reply_text(text)
+    except ValueError as e:
+        await update.message.reply_text(
+            f"⚠️ {e}\n\n"
+            "Примеры:\n"
+            "/refusals week\n"
+            "/refusals неделя\n"
+            "/refusals prev_week\n"
+            "/refusals прошлая неделя\n"
+            "/refusals day\n"
+            "/refusals сегодня\n"
+            "/refusals all\n"
+            "/refusals период 2026-06-01 2026-06-07\n"
+            "/refusals range 2026-06-01 2026-06-07"
+        )
+    except Exception as e:
+        logger.error(f"Refusals stats error: {type(e).__name__}: {e}", exc_info=True)
+        await update.message.reply_text("Не удалось получить статистику отказов. Попробуйте позже.")
 
 
 async def funnel_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3169,6 +3402,8 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stats", common_stats))
+    app.add_handler(CommandHandler("refusals", refusals_stats))
     app.add_handler(CommandHandler("leads", leads_stats))
     app.add_handler(CommandHandler("funnel", funnel_stats))
     app.add_handler(CommandHandler("funnel_add", funnel_add))
@@ -3198,3 +3433,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
