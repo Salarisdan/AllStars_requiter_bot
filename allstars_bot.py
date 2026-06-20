@@ -514,13 +514,16 @@ def _analytics_stats(period_start: datetime | None, period_end: datetime | None)
     except Exception as e:
         logger.error(f"Stats reconciliation from sheets failed: {type(e).__name__}: {e}", exc_info=True)
 
-    completed = main_submissions | waitlist_submissions
+    # Funnel math should be based on the same cohort: users who started in period.
+    main_in_funnel = starts & main_submissions
+    waitlist_in_funnel = (starts & waitlist_submissions) - main_in_funnel
+    completed = main_in_funnel | waitlist_in_funnel
     dropped = starts - completed
 
     return {
         "starts": len(starts),
-        "main_submissions": len(main_submissions),
-        "waitlist_submissions": len(waitlist_submissions),
+        "main_submissions": len(main_in_funnel),
+        "waitlist_submissions": len(waitlist_in_funnel),
         "completed": len(completed),
         "dropped": len(dropped),
     }
