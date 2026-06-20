@@ -502,6 +502,18 @@ def _analytics_stats(period_start: datetime | None, period_end: datetime | None)
     starts = distinct_users(("start",))
     main_submissions = distinct_users(("submitted_main",))
     waitlist_submissions = distinct_users(("submitted_waitlist",))
+
+    # DB remains the primary source, but reconcile with Sheets in case historical
+    # records have not been fully migrated yet.
+    try:
+        sheet_starts = _collect_start_sets(period_start, period_end)
+        sheet_main, sheet_waitlist, _ = _collect_submission_sets(period_start, period_end)
+        starts |= sheet_starts
+        main_submissions |= sheet_main
+        waitlist_submissions |= sheet_waitlist
+    except Exception as e:
+        logger.error(f"Stats reconciliation from sheets failed: {type(e).__name__}: {e}", exc_info=True)
+
     completed = main_submissions | waitlist_submissions
     dropped = starts - completed
 
@@ -956,6 +968,42 @@ def _collect_submission_sets(
                 target.add(key)
 
     return main_submissions, waitlist_submissions, main_submissions | waitlist_submissions
+
+
+def _collect_start_sets(
+    period_start: datetime | None,
+    period_end: datetime | None,
+) -> set[str]:
+    """Собирает пользователей со стартом из листов 'Старты' и 'Лиды'."""
+    starts: set[str] = set()
+
+    for sheet_getter, label in ((get_starts_sheet, "starts"), (get_leads_sheet, "leads")):
+        try:
+            rows = sheet_getter().get_all_values()
+        except Exception as e:
+            logger.error(f"Start stats read error ({label}): {type(e).__name__}: {e}", exc_info=True)
+            continue
+
+        if not rows or len(rows) == 1:
+            continue
+
+        headers = rows[0]
+        idx_date = headers.index("Дата") if "Дата" in headers else 0
+        idx_tg_id = headers.index("TG ID") if "TG ID" in headers else 2
+        idx_username = headers.index("TG Username") if "TG Username" in headers else 1
+
+        for row in rows[1:]:
+            if idx_date >= len(row):
+                continue
+            dt = _parse_saved_datetime(row[idx_date])
+            if not dt or not _in_period(dt, period_start, period_end):
+                continue
+
+            key = _row_user_key(row, idx_tg_id, idx_username)
+            if key:
+                starts.add(key)
+
+    return starts
 
 
 def build_start_and_refusal_stats_text(
