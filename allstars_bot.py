@@ -161,6 +161,7 @@ _gs_client = None
 _gs_sheet  = None
 _gs_rejections = None  # Лист с отказами от верификации
 _gs_leads = None       # Лист с лидами (первый запуск /start)
+_gs_starts = None      # Лист со всеми событиями /start
 _gs_funnel = None      # Лист с этапами воронки
 
 
@@ -288,6 +289,28 @@ def get_leads_sheet():
         return _gs_leads
     except Exception as e:
         logger.error(f"Leads sheet error: {type(e).__name__}: {e}", exc_info=True)
+        raise
+
+
+def get_starts_sheet():
+    """Возвращает лист 'Старты', создаёт если не существует."""
+    global _gs_starts, _gs_client
+    try:
+        if _gs_starts is not None:
+            return _gs_starts
+
+        get_sheet()
+        spreadsheet = open_spreadsheet(_gs_client)
+        try:
+            _gs_starts = spreadsheet.worksheet("Старты")
+        except Exception:
+            _gs_starts = spreadsheet.add_worksheet(title="Старты", rows=5000, cols=6)
+            _gs_starts.append_row([
+                "Дата", "TG Username", "TG ID", "Имя", "Дата периода (с 21:00)", "Период",
+            ])
+        return _gs_starts
+    except Exception as e:
+        logger.error(f"Starts sheet error: {type(e).__name__}: {e}", exc_info=True)
         raise
 
 
@@ -435,6 +458,28 @@ def register_lead_if_new(user) -> bool:
         return True
     except Exception as e:
         logger.error(f"Lead registration error: {type(e).__name__}: {e}", exc_info=True)
+        return False
+
+
+def register_start_event(user) -> bool:
+    """Регистрирует каждое событие /start без дедупликации."""
+    try:
+        starts = get_starts_sheet()
+        now_msk = datetime.now(MSK_TZ)
+        period_start = _business_period_start(now_msk)
+        period_end = period_start + timedelta(days=1)
+
+        starts.append_row([
+            now_msk.strftime("%d.%m.%Y %H:%M"),
+            user.username or "",
+            str(user.id),
+            user.full_name or "",
+            period_start.strftime("%Y-%m-%d"),
+            f"{period_start.strftime('%d.%m %H:%M')} - {period_end.strftime('%d.%m %H:%M')}",
+        ])
+        return True
+    except Exception as e:
+        logger.error(f"Start event registration error: {type(e).__name__}: {e}", exc_info=True)
         return False
 
 
@@ -665,31 +710,64 @@ def _in_period(dt: datetime, start: datetime | None, end: datetime | None) -> bo
     return True
 
 
+def _row_user_key(row: list[str], idx_tg_id: int, idx_username: int) -> str:
+    tg_id = row[idx_tg_id].strip() if idx_tg_id < len(row) else ""
+    username = row[idx_username].strip().lstrip("@").casefold() if idx_username < len(row) else ""
+    return tg_id or (f"@{username}" if username else "")
+
+
+def _collect_submitted_users(period_start: datetime | None, period_end: datetime | None) -> set[str]:
+    """Собирает уникальных пользователей, которые дошли до конца анкеты или листа ожидания."""
+    submitted: set[str] = set()
+
+    sources = (
+        (get_main_worksheet, "allstars"),
+        (get_waitlist_sheet, "waitlist"),
+    )
+
+    for sheet_getter, _label in sources:
+        try:
+            rows = sheet_getter().get_all_values()
+        except Exception as e:
+            logger.error(f"Submitted stats read error ({_label}): {type(e).__name__}: {e}", exc_info=True)
+            continue
+
+        if not rows or len(rows) == 1:
+            continue
+
+        headers = rows[0]
+        idx_date = headers.index("Дата") if "Дата" in headers else 0
+        idx_tg_id = headers.index("TG ID") if "TG ID" in headers else 2
+        idx_username = headers.index("TG Username") if "TG Username" in headers else 1
+
+        for row in rows[1:]:
+            if idx_date >= len(row):
+                continue
+            dt = _parse_saved_datetime(row[idx_date])
+            if not dt or not _in_period(dt, period_start, period_end):
+                continue
+
+            key = _row_user_key(row, idx_tg_id, idx_username)
+            if key:
+                submitted.add(key)
+
+    return submitted
+
+
 def build_start_and_refusal_stats_text(
     period_start: datetime | None = None,
     period_end: datetime | None = None,
     period_label: str = "за всё время",
 ) -> str:
-    """Статистика по уникальным /start и отказам от анкеты."""
-    warnings: list[str] = []
+    """Статистика воронки: /start -> завершённая анкета/заявка -> не дошли до конца."""
 
     try:
-        leads_rows = get_leads_sheet().get_all_values()
+        leads_rows = get_starts_sheet().get_all_values()
     except Exception as e:
-        logger.error(f"Leads read error in common stats: {type(e).__name__}: {e}", exc_info=True)
+        logger.error(f"Starts read error in common stats: {type(e).__name__}: {e}", exc_info=True)
         leads_rows = []
-        warnings.append("не удалось прочитать лист Лиды")
-
-    try:
-        rejection_rows = get_rejections_sheet().get_all_values()
-    except Exception as e:
-        logger.error(f"Rejections read error in common stats: {type(e).__name__}: {e}", exc_info=True)
-        rejection_rows = []
-        warnings.append("не удалось прочитать лист Отказы")
 
     start_users: set[str] = set()
-    refusal_users: set[str] = set()
-    refusal_reasons: dict[str, int] = defaultdict(int)
 
     if leads_rows:
         lead_headers = leads_rows[0]
@@ -704,56 +782,21 @@ def build_start_and_refusal_stats_text(
             if not dt or not _in_period(dt, period_start, period_end):
                 continue
 
-            tg_id = row[idx_lead_tg_id].strip() if idx_lead_tg_id < len(row) else ""
-            username = row[idx_lead_username].strip().lstrip("@").casefold() if idx_lead_username < len(row) else ""
-            key = tg_id or (f"@{username}" if username else "")
+            key = _row_user_key(row, idx_lead_tg_id, idx_lead_username)
             if key:
                 start_users.add(key)
 
-    if rejection_rows:
-        rej_headers = rejection_rows[0]
-        idx_rej_date = rej_headers.index("Дата") if "Дата" in rej_headers else 0
-        idx_rej_tg_id = rej_headers.index("TG ID") if "TG ID" in rej_headers else 2
-        idx_rej_username = rej_headers.index("TG Username") if "TG Username" in rej_headers else 1
-        idx_rej_reason = rej_headers.index("Причина отказа") if "Причина отказа" in rej_headers else 6
-
-        for row in rejection_rows[1:]:
-            if idx_rej_date >= len(row):
-                continue
-            dt = _parse_saved_datetime(row[idx_rej_date])
-            if not dt or not _in_period(dt, period_start, period_end):
-                continue
-
-            tg_id = row[idx_rej_tg_id].strip() if idx_rej_tg_id < len(row) else ""
-            username = row[idx_rej_username].strip().lstrip("@").casefold() if idx_rej_username < len(row) else ""
-            reason = row[idx_rej_reason].strip() if idx_rej_reason < len(row) else ""
-
-            key = tg_id or (f"@{username}" if username else "")
-            if key:
-                refusal_users.add(key)
-
-            if reason:
-                refusal_reasons[reason] += 1
+    submitted_users = _collect_submitted_users(period_start, period_end)
+    refused_users = start_users - submitted_users
 
     lines = [
         "📊 Статистика кандидатов",
         "",
         f"Период: {period_label}",
         f"Пользователей с /start: {len(start_users)}",
-        f"Пользователей, отказавшихся от анкеты: {len(refusal_users)}",
+        f"Пользователей, оставивших заявку: {len(submitted_users)}",
+        f"Пользователей, не дошедших до заявки: {len(refused_users)}",
     ]
-
-    if refusal_reasons:
-        lines.append("")
-        lines.append("Причины отказа (события):")
-        for reason, count in sorted(refusal_reasons.items(), key=lambda item: (-item[1], item[0])):
-            lines.append(f"- {reason}: {count}")
-
-    if warnings:
-        lines.append("")
-        lines.append("⚠️ Замечание:")
-        for item in warnings:
-            lines.append(f"- {item}")
 
     return "\n".join(lines)
 
@@ -764,55 +807,42 @@ def build_refusals_stats_text(
     period_label: str = "за всё время",
 ) -> str:
     try:
-        rows = get_rejections_sheet().get_all_values()
+        leads_rows = get_starts_sheet().get_all_values()
     except Exception as e:
-        logger.error(f"Refusals read error: {type(e).__name__}: {e}", exc_info=True)
-        return "📉 Отказы\n\nНе удалось прочитать лист Отказы. Проверьте доступ/ID таблицы."
+        logger.error(f"Starts read error in refusals stats: {type(e).__name__}: {e}", exc_info=True)
+        return "📉 Не дошли до анкеты\n\nНе удалось прочитать лист Старты."
 
-    if not rows or len(rows) == 1:
-        return "📉 Отказы\n\nПока нет данных."
+    if not leads_rows or len(leads_rows) == 1:
+        return "📉 Не дошли до анкеты\n\nПока нет данных."
 
-    headers = rows[0]
+    headers = leads_rows[0]
     idx_date = headers.index("Дата") if "Дата" in headers else 0
     idx_tg_id = headers.index("TG ID") if "TG ID" in headers else 2
     idx_username = headers.index("TG Username") if "TG Username" in headers else 1
-    idx_reason = headers.index("Причина отказа") if "Причина отказа" in headers else 6
 
-    unique_users: set[str] = set()
-    reason_counts: dict[str, int] = defaultdict(int)
-    event_count = 0
-
-    for row in rows[1:]:
+    start_users: set[str] = set()
+    for row in leads_rows[1:]:
         if idx_date >= len(row):
             continue
         dt = _parse_saved_datetime(row[idx_date])
         if not dt or not _in_period(dt, period_start, period_end):
             continue
 
-        event_count += 1
-        tg_id = row[idx_tg_id].strip() if idx_tg_id < len(row) else ""
-        username = row[idx_username].strip().lstrip("@").casefold() if idx_username < len(row) else ""
-        reason = row[idx_reason].strip() if idx_reason < len(row) else "(без причины)"
-
-        key = tg_id or (f"@{username}" if username else "")
+        key = _row_user_key(row, idx_tg_id, idx_username)
         if key:
-            unique_users.add(key)
+            start_users.add(key)
 
-        reason_counts[reason] += 1
+    submitted_users = _collect_submitted_users(period_start, period_end)
+    dropped_off_users = start_users - submitted_users
 
     lines = [
-        "📉 Статистика отказов",
+        "📉 Не дошли до анкеты",
         "",
         f"Период: {period_label}",
-        f"Уникальных пользователей: {len(unique_users)}",
-        f"Всего событий отказа: {event_count}",
+        f"Пользователей с /start: {len(start_users)}",
+        f"Пользователей, оставивших заявку: {len(submitted_users)}",
+        f"Пользователей, не дошедших до анкеты: {len(dropped_off_users)}",
     ]
-
-    if reason_counts:
-        lines.append("")
-        lines.append("Причины:")
-        for reason, count in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0])):
-            lines.append(f"- {reason}: {count}")
 
     return "\n".join(lines)
 
@@ -1972,6 +2002,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
     if update.effective_user:
+        if register_start_event(update.effective_user):
+            logger.info(f"Start event registered from /start: user_id={update.effective_user.id}")
+
         is_new_lead = register_lead_if_new(update.effective_user)
         if is_new_lead:
             logger.info(f"New lead registered from /start: user_id={update.effective_user.id}")
