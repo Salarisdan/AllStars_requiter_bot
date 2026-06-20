@@ -4,8 +4,10 @@ import json
 import logging
 import os
 import re
+import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ChatAction
@@ -164,6 +166,9 @@ _gs_leads = None       # Лист с лидами (первый запуск /st
 _gs_starts = None      # Лист со всеми событиями /start
 _gs_funnel = None      # Лист с этапами воронки
 
+ANALYTICS_DB_PATH = Path(os.getenv("BOT_ANALYTICS_DB_PATH", Path(__file__).with_name("allstars_bot_analytics.sqlite3")))
+_analytics_bootstrapped = False
+
 
 def _extract_spreadsheet_id(value: str) -> str:
     """Extract spreadsheet id from plain id or full Google Sheets URL."""
@@ -312,6 +317,189 @@ def get_starts_sheet():
     except Exception as e:
         logger.error(f"Starts sheet error: {type(e).__name__}: {e}", exc_info=True)
         raise
+
+
+def _normalize_user_key(user_id: int | str | None, username: str | None) -> str:
+    uid = str(user_id).strip() if user_id is not None else ""
+    uname = str(username or "").strip().lstrip("@").casefold()
+    return uid or (f"@{uname}" if uname else "")
+
+
+def _parse_period_date(value: str) -> str:
+    dt = _parse_saved_datetime(value)
+    if not dt:
+        return ""
+    return dt.strftime("%Y-%m-%d")
+
+
+def _analytics_conn() -> sqlite3.Connection:
+    ANALYTICS_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS analytics_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            tg_id TEXT NOT NULL,
+            username TEXT,
+            full_name TEXT,
+            created_at TEXT NOT NULL,
+            period_key TEXT NOT NULL,
+            source TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_events_type_period ON analytics_events(event_type, period_key)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_events_tg_id ON analytics_events(tg_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_events_created_at ON analytics_events(created_at)")
+    return conn
+
+
+def _record_analytics_event(
+    event_type: str,
+    user_id: int | str | None,
+    username: str = "",
+    full_name: str = "",
+    created_at: datetime | None = None,
+    source: str = "local",
+) -> bool:
+    key = _normalize_user_key(user_id, username)
+    if not key:
+        return False
+
+    dt = (created_at or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    period_start = _business_period_start(dt)
+    period_key = period_start.strftime("%Y-%m-%d")
+
+    try:
+        with _analytics_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO analytics_events (
+                    event_type, tg_id, username, full_name, created_at, period_key, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_type,
+                    key,
+                    str(username or "").strip().lstrip("@"),
+                    str(full_name or "").strip(),
+                    dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    period_key,
+                    source,
+                ),
+            )
+        return True
+    except Exception as e:
+        logger.error(f"Analytics event insert failed ({event_type}): {type(e).__name__}: {e}", exc_info=True)
+        return False
+
+
+def _bootstrap_analytics_from_sheets() -> None:
+    global _analytics_bootstrapped
+    if _analytics_bootstrapped:
+        return
+
+    try:
+        with _analytics_conn() as conn:
+            cursor = conn.execute("SELECT COUNT(*) AS count FROM analytics_events")
+            existing_count = int(cursor.fetchone()["count"])
+            if existing_count > 0:
+                _analytics_bootstrapped = True
+                return
+
+            def import_rows(sheet, event_type: str, username_idx: int = 1, tg_id_idx: int = 2, date_idx: int = 0, name_idx: int = 3):
+                try:
+                    rows = sheet.get_all_values()
+                except Exception as e:
+                    logger.error(f"Analytics bootstrap read failed ({event_type}): {type(e).__name__}: {e}", exc_info=True)
+                    return
+
+                if not rows or len(rows) == 1:
+                    return
+
+                headers = rows[0]
+                idx_date = headers.index("Дата") if "Дата" in headers else date_idx
+                idx_tg_id = headers.index("TG ID") if "TG ID" in headers else tg_id_idx
+                idx_username = headers.index("TG Username") if "TG Username" in headers else username_idx
+                idx_name = headers.index("Имя") if "Имя" in headers else name_idx
+
+                for row in rows[1:]:
+                    if idx_date >= len(row):
+                        continue
+                    dt = _parse_saved_datetime(row[idx_date])
+                    if not dt:
+                        continue
+
+                    key = _normalize_user_key(
+                        row[idx_tg_id] if idx_tg_id < len(row) else "",
+                        row[idx_username] if idx_username < len(row) else "",
+                    )
+                    if not key:
+                        continue
+
+                    conn.execute(
+                        """
+                        INSERT INTO analytics_events (
+                            event_type, tg_id, username, full_name, created_at, period_key, source
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            event_type,
+                            key,
+                            str(row[idx_username]).strip().lstrip("@") if idx_username < len(row) else "",
+                            str(row[idx_name]).strip() if idx_name < len(row) else "",
+                            dt.strftime("%Y-%m-%d %H:%M:%S"),
+                            dt.astimezone(MSK_TZ).strftime("%Y-%m-%d"),
+                            "bootstrap",
+                        ),
+                    )
+
+            import_rows(get_starts_sheet(), "start")
+            import_rows(get_leads_sheet(), "start")
+            import_rows(get_main_worksheet(), "submitted_main")
+            import_rows(get_waitlist_sheet(), "submitted_waitlist")
+
+        _analytics_bootstrapped = True
+    except Exception as e:
+        logger.error(f"Analytics bootstrap failed: {type(e).__name__}: {e}", exc_info=True)
+
+
+def _analytics_stats(period_start: datetime | None, period_end: datetime | None) -> dict[str, int]:
+    _bootstrap_analytics_from_sheets()
+
+    start_key = period_start.strftime("%Y-%m-%d") if period_start else None
+    end_key = period_end.strftime("%Y-%m-%d") if period_end else None
+
+    def distinct_users(event_types: tuple[str, ...]) -> set[str]:
+        query = "SELECT DISTINCT tg_id FROM analytics_events WHERE event_type IN ({})".format(
+            ",".join("?" for _ in event_types)
+        )
+        params: list[str] = list(event_types)
+        if start_key and end_key:
+            query += " AND period_key >= ? AND period_key < ?"
+            params.extend([start_key, end_key])
+
+        with _analytics_conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return {str(row[0]).strip() for row in rows if str(row[0]).strip()}
+
+    starts = distinct_users(("start",))
+    main_submissions = distinct_users(("submitted_main",))
+    waitlist_submissions = distinct_users(("submitted_waitlist",))
+    completed = main_submissions | waitlist_submissions
+    dropped = starts - completed
+
+    return {
+        "starts": len(starts),
+        "main_submissions": len(main_submissions),
+        "waitlist_submissions": len(waitlist_submissions),
+        "completed": len(completed),
+        "dropped": len(dropped),
+    }
 
 
 def get_funnel_sheet():
@@ -765,43 +953,17 @@ def build_start_and_refusal_stats_text(
 ) -> str:
     """Статистика воронки: /start -> завершённая анкета/заявка -> не дошли до конца."""
 
-    try:
-        leads_rows = get_starts_sheet().get_all_values()
-    except Exception as e:
-        logger.error(f"Starts read error in common stats: {type(e).__name__}: {e}", exc_info=True)
-        leads_rows = []
-
-    start_users: set[str] = set()
-
-    if leads_rows:
-        lead_headers = leads_rows[0]
-        idx_lead_date = lead_headers.index("Дата") if "Дата" in lead_headers else 0
-        idx_lead_tg_id = lead_headers.index("TG ID") if "TG ID" in lead_headers else 2
-        idx_lead_username = lead_headers.index("TG Username") if "TG Username" in lead_headers else 1
-
-        for row in leads_rows[1:]:
-            if idx_lead_date >= len(row):
-                continue
-            dt = _parse_saved_datetime(row[idx_lead_date])
-            if not dt or not _in_period(dt, period_start, period_end):
-                continue
-
-            key = _row_user_key(row, idx_lead_tg_id, idx_lead_username)
-            if key:
-                start_users.add(key)
-
-    main_submissions, waitlist_submissions, submitted_users = _collect_submission_sets(period_start, period_end)
-    refused_users = start_users - submitted_users
+    stats = _analytics_stats(period_start, period_end)
 
     lines = [
         "📊 Статистика кандидатов",
         "",
         f"Период: {period_label}",
-        f"Пользователей с /start: {len(start_users)}",
-        f"Прошли анкету полностью: {len(submitted_users)}",
-        f"  • Основная заявка: {len(main_submissions)}",
-        f"  • Лист ожидания: {len(waitlist_submissions)}",
-        f"Пользователей, не дошедших до заявки: {len(refused_users)}",
+        f"Пользователей с /start: {stats['starts']}",
+        f"Прошли анкету полностью: {stats['completed']}",
+        f"  • Основная заявка: {stats['main_submissions']}",
+        f"  • Лист ожидания: {stats['waitlist_submissions']}",
+        f"Пользователей, не дошедших до заявки: {stats['dropped']}",
     ]
 
     return "\n".join(lines)
@@ -812,44 +974,17 @@ def build_refusals_stats_text(
     period_end: datetime | None = None,
     period_label: str = "за всё время",
 ) -> str:
-    try:
-        leads_rows = get_starts_sheet().get_all_values()
-    except Exception as e:
-        logger.error(f"Starts read error in refusals stats: {type(e).__name__}: {e}", exc_info=True)
-        return "📉 Не дошли до анкеты\n\nНе удалось прочитать лист Старты."
-
-    if not leads_rows or len(leads_rows) == 1:
-        return "📉 Не дошли до анкеты\n\nПока нет данных."
-
-    headers = leads_rows[0]
-    idx_date = headers.index("Дата") if "Дата" in headers else 0
-    idx_tg_id = headers.index("TG ID") if "TG ID" in headers else 2
-    idx_username = headers.index("TG Username") if "TG Username" in headers else 1
-
-    start_users: set[str] = set()
-    for row in leads_rows[1:]:
-        if idx_date >= len(row):
-            continue
-        dt = _parse_saved_datetime(row[idx_date])
-        if not dt or not _in_period(dt, period_start, period_end):
-            continue
-
-        key = _row_user_key(row, idx_tg_id, idx_username)
-        if key:
-            start_users.add(key)
-
-    main_submissions, waitlist_submissions, submitted_users = _collect_submission_sets(period_start, period_end)
-    dropped_off_users = start_users - submitted_users
+    stats = _analytics_stats(period_start, period_end)
 
     lines = [
         "📉 Не дошли до анкеты",
         "",
         f"Период: {period_label}",
-        f"Пользователей с /start: {len(start_users)}",
-        f"Прошли анкету полностью: {len(submitted_users)}",
-        f"  • Основная заявка: {len(main_submissions)}",
-        f"  • Лист ожидания: {len(waitlist_submissions)}",
-        f"Пользователей, не дошедших до анкеты: {len(dropped_off_users)}",
+        f"Пользователей с /start: {stats['starts']}",
+        f"Прошли анкету полностью: {stats['completed']}",
+        f"  • Основная заявка: {stats['main_submissions']}",
+        f"  • Лист ожидания: {stats['waitlist_submissions']}",
+        f"Пользователей, не дошедших до анкеты: {stats['dropped']}",
     ]
 
     return "\n".join(lines)
@@ -1115,6 +1250,13 @@ def save_to_sheet(data: dict) -> bool:
                 logger.info(f"Updated existing candidate row #{update_row}")
             else:
                 sheet.append_row(row)
+            _record_analytics_event(
+                "submitted_main",
+                user_id=data.get("user_id", ""),
+                username=data.get("username", ""),
+                full_name=data.get("name", ""),
+                source="sheets",
+            )
             logger.info("Saved to Google Sheets successfully!")
             return True
         except Exception as e:
@@ -1238,6 +1380,13 @@ def save_waitlist(data: dict) -> bool:
                 )
 
         sheet.append_row(row)
+        _record_analytics_event(
+            "submitted_waitlist",
+            user_id=data.get("user_id", ""),
+            username=data.get("username", ""),
+            full_name=data.get("name", ""),
+            source="sheets",
+        )
         logger.info("Waitlist entry saved.")
         return True
     except Exception as e:
