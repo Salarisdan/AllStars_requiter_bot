@@ -2274,7 +2274,7 @@ async def start_form_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user and is_form_blocked_for_user(user.id):
         await update.effective_chat.send_message(
             "К сожалению, ваша заявка была отклонена по критерию английского языка.\n\n"
-            "Минимальный порог для этой вакансии: *B1 и выше*.\n"
+            "Минимальный порог для этой вакансии: *A2+*.\n"
             "Повторное заполнение анкеты недоступно.",
             parse_mode="Markdown",
             reply_markup=main_keyboard(),
@@ -2832,7 +2832,7 @@ async def q5_english_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "╔══════════════════════════════╗\n"
             "║   😔  ЗАЯВКА ОТКЛОНЕНА     ║\n"
             "╚══════════════════════════════╝\n\n"
-            "Для этой вакансии нужен уровень английского *B1 и выше*.\n"
+            "Для этой вакансии нужен уровень английского *A2+*.\n"
             f"У вас указан уровень: *{level}*.\n\n"
             "Повторное заполнение анкеты недоступно.",
             parse_mode="Markdown",
