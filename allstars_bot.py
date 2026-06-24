@@ -1483,7 +1483,6 @@ def estimate_minutes_left(step: int, total: int) -> int:
 
 
 FORM_TOTAL_QUESTIONS = 21
-MIN_PSYCH_ANSWER_LEN = 50
 VERIFICATION_CALLBACK_PATTERN = r"^(?:verif_yes|verif_no|nda_more)$"
 
 
@@ -1493,7 +1492,7 @@ def question_header(step: int, total: int = FORM_TOTAL_QUESTIONS) -> str:
 
 def ensure_min_psych_answer(text: str) -> str | None:
     answer = (text or "").strip()
-    if len(answer) < MIN_PSYCH_ANSWER_LEN:
+    if not answer:
         return None
     return answer
 
@@ -1619,9 +1618,6 @@ def score_candidate(data: dict) -> tuple[str, str]:
 
     exp_num = _parse_number(data.get("experience", "") or "") or 0
     score += 3 if exp_num >= 6 else 2 if exp_num >= 3 else 1 if exp_num > 0 else 0
-
-    platform = data.get("platform", "")
-    score += 2 if platform == "Обе платформы" else 1 if platform else 0
 
     shifts = [s.strip() for s in str(data.get("shifts", "")).split(",") if s.strip()]
     score += 2 if len(shifts) >= 2 else 1 if len(shifts) == 1 else 0
@@ -2660,7 +2656,7 @@ async def q3_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"{question_header(4, FORM_TOTAL_QUESTIONS)}*Вопрос 5 из 21:*\n"
         "Расскажи о твоем самом классном рабочем дне в адалте?\n\n"
-        "_Ответ должен быть развернутым: минимум 50 символов._",
+        "_Ответ можно коротко или развернуто._",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
     return Q4_FEEDBACK
@@ -2673,7 +2669,7 @@ async def q4_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = ensure_min_psych_answer(update.message.text)
     if answer is None:
         await update.message.reply_text(
-            f"⚠️ Нужен развернутый ответ минимум {MIN_PSYCH_ANSWER_LEN} символов. Попробуйте подробнее:",
+            "⚠️ Нужен ответ. Попробуйте еще раз:",
             reply_markup=cancel_keyboard(),
         )
         return Q4_FEEDBACK
@@ -2683,7 +2679,7 @@ async def q4_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"{question_header(5, FORM_TOTAL_QUESTIONS)}*Вопрос 6 из 21:*\n"
         "О чем ты мечтаешь?\n\n"
-        "_Ответ должен быть развернутым: минимум 50 символов._",
+        "_Ответ можно коротко или развернуто._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
@@ -2697,7 +2693,7 @@ async def q4_low_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = ensure_min_psych_answer(update.message.text)
     if answer is None:
         await update.message.reply_text(
-            f"⚠️ Нужен развернутый ответ минимум {MIN_PSYCH_ANSWER_LEN} символов. Попробуйте подробнее:",
+            "⚠️ Нужен ответ. Попробуйте еще раз:",
             reply_markup=cancel_keyboard(),
         )
         return Q4_LOW_RESULT
@@ -2707,7 +2703,7 @@ async def q4_low_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"{question_header(6, FORM_TOTAL_QUESTIONS)}*Вопрос 7 из 21:*\n"
         "Что для вас крутой ТимЛид?\n\n"
-        "_Ответ должен быть развернутым: минимум 50 символов._",
+        "_Ответ можно коротко или развернуто._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
@@ -2721,7 +2717,7 @@ async def q4_kpi_fail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = ensure_min_psych_answer(update.message.text)
     if answer is None:
         await update.message.reply_text(
-            f"⚠️ Нужен развернутый ответ минимум {MIN_PSYCH_ANSWER_LEN} символов. Попробуйте подробнее:",
+            "⚠️ Нужен ответ. Попробуйте еще раз:",
             reply_markup=cancel_keyboard(),
         )
         return Q4_KPI_FAIL
@@ -2746,7 +2742,7 @@ async def q4_boundaries(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = ensure_min_psych_answer(update.message.text)
     if answer is None:
         await update.message.reply_text(
-            f"⚠️ Нужен развернутый ответ минимум {MIN_PSYCH_ANSWER_LEN} символов. Попробуйте подробнее:",
+            "⚠️ Нужен ответ. Попробуйте еще раз:",
             reply_markup=cancel_keyboard(),
         )
         return Q4_BOUNDARIES
@@ -2756,7 +2752,7 @@ async def q4_boundaries(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"{question_header(8, FORM_TOTAL_QUESTIONS)}*Вопрос 9 из 21:*\n"
         "Что для вас крутой ТимЛид?\n\n"
-        "_Ответ должен быть развернутым: минимум 50 символов._",
+        "_Ответ можно коротко или развернуто._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
@@ -2770,7 +2766,7 @@ async def q4_conflict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = ensure_min_psych_answer(update.message.text)
     if answer is None:
         await update.message.reply_text(
-            f"⚠️ Нужен развернутый ответ минимум {MIN_PSYCH_ANSWER_LEN} символов. Попробуйте подробнее:",
+            "⚠️ Нужен ответ. Попробуйте еще раз:",
             reply_markup=cancel_keyboard(),
         )
         return Q4_CONFLICT
@@ -2780,7 +2776,7 @@ async def q4_conflict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"{question_header(9, FORM_TOTAL_QUESTIONS)}*Вопрос 10 из 21:*\n"
         "О чем ты мечтаешь?\n\n"
-        "_Ответ должен быть развернутым: минимум 50 символов._",
+        "_Ответ можно коротко или развернуто._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
@@ -2794,7 +2790,7 @@ async def q4_stress_control(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = ensure_min_psych_answer(update.message.text)
     if answer is None:
         await update.message.reply_text(
-            f"⚠️ Нужен развернутый ответ минимум {MIN_PSYCH_ANSWER_LEN} символов. Попробуйте подробнее:",
+            "⚠️ Нужен ответ. Попробуйте еще раз:",
             reply_markup=cancel_keyboard(),
         )
         return Q4_STRESS_CONTROL
@@ -2841,12 +2837,20 @@ async def q5_english_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     await q.edit_message_text(f"🌐 Английский: *{level}* ✅", parse_mode="Markdown")
-    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q6_PLATFORM")
+    context.user_data["platform"] = ""
+    context.user_data["open_shifts"] = get_open_shifts_for("")
+    shift_names = {
+        "00-06": "🌙 00:00–06:00", "06-12": "🌅 06:00–12:00",
+        "12-18": "☀️ 12:00–18:00", "18-00": "🌆 18:00–00:00",
+    }
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q7_SHIFT")
     await q.message.reply_text(
-        f"{question_header(8, FORM_TOTAL_QUESTIONS)}*Вопрос 9 из 21:*\nКакая платформа вас интересует?",
-        parse_mode="Markdown", reply_markup=platform_keyboard(),
+        f"{question_header(8, FORM_TOTAL_QUESTIONS)}*Вопрос 9 из 21:*\nКакая смена вам подходит?\n\n"
+        f"🟢 *Сейчас открыт набор:* {' · '.join(shift_names[s] for s in context.user_data['open_shifts']) if context.user_data['open_shifts'] else 'нет открытых смен'}\n\n"
+        "_Можно выбрать несколько, затем нажмите «Подтвердить»._",
+        parse_mode="Markdown", reply_markup=shift_keyboard(open_shifts=context.user_data["open_shifts"]),
     )
-    return Q6_PLATFORM
+    return Q7_SHIFT
 
 
 async def q6_platform_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3640,7 +3644,6 @@ def main():
             Q4_CONFLICT:      [MessageHandler(filters.TEXT & ~filters.COMMAND, q4_conflict)],
             Q4_STRESS_CONTROL:[MessageHandler(filters.TEXT & ~filters.COMMAND, q4_stress_control)],
             Q5_ENGLISH:       [CallbackQueryHandler(q5_english_cb, pattern="^eng_")],
-            Q6_PLATFORM:      [CallbackQueryHandler(q6_platform_cb, pattern="^plat_")],
             Q7_SHIFT:         [CallbackQueryHandler(q7_shift_cb, pattern="^shift_")],
             Q8_EXPERIENCE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q8_experience)],
             Q9_TOP_PAGES:      [MessageHandler(filters.TEXT & ~filters.COMMAND, q9_top_pages)],
