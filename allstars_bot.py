@@ -2362,8 +2362,8 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "1) Материалы доступны только кандидатам после проверки\n"
             "2) Доступ выдает HR после заполнения анкеты\n\n"
             "✅ Уже 120+ кандидатов прошли этот этап и получили доступ к гайдам.\n\n"
-            "Если открыть ссылки сейчас - Notion покажет отказ в доступе.\n\n"
-            "Подтвердите, что вы понимаете это условие, и только после этого откроются ссылки.",
+            "Ссылки на материалы не показываются в боте. После анкеты HR выдаст доступ напрямую.\n\n"
+            "Подтвердите, что вы понимаете это условие, и продолжим анкету.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("☑️ Я понимаю, что доступ выдаст HR", callback_data="guide_ack")],
@@ -3412,7 +3412,7 @@ async def guide_apply_now_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def guide_ack_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer("Отлично! Открываю ссылки на гайды.")
+    await q.answer("Отлично! Продолжаем анкету.")
 
     try:
         user = update.effective_user
@@ -3438,14 +3438,9 @@ async def guide_ack_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(
         "📘 *Гайд агентства Allstars*\n\n"
         "✅ Условие зафиксировано: доступ к материалам выдает HR после анкеты.\n\n"
-        "Ссылки на гайды:\n"
-        "• OnlyFans\n"
-        "• Fansly\n\n"
-        "Если Notion сейчас показывает отказ в доступе - это нормально до выдачи прав HR-менеджером.",
+        "Ссылки в боте не показываются. После анкеты HR выдаст доступ напрямую.",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📙 Гайд на OnlyFans", url="https://www.notion.so/28d845f0c6ed818698bbe00ebf69ffda")],
-            [InlineKeyboardButton("📗 Гайд на Fansly",   url="https://www.notion.so/1dc845f0c6ed8029a3dbd32f34c9a0b5")],
             [InlineKeyboardButton("✅ Понял(а), заполнить анкету", callback_data="guide_apply_now")],
             [InlineKeyboardButton("⬅️ Назад в меню", callback_data="guide_back_menu")],
         ]),
