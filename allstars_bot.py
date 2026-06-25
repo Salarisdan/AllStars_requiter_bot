@@ -53,7 +53,10 @@ def _required_env(name: str) -> str:
     """Return required env variable or raise a clear startup error."""
     value = os.getenv(name, "").strip()
     if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
+        raise RuntimeError(
+            f"Missing required environment variable: {name}. "
+            "Create a .env file from .env.example and fill in the real values."
+        )
     return value
 
 
