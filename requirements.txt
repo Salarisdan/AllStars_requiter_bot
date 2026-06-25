@@ -7,3 +7,5 @@ httpx==0.27.2
 anyio==4.4.0
 certifi
 httpcore==1.0.9
+Flask==3.0.3
+gunicorn==22.0.0
