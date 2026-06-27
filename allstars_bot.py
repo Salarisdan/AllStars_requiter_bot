@@ -3217,13 +3217,13 @@ async def q17_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text == "? �������� ����������":
+    if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
     email = update.message.text.strip().lower()
     if not is_valid_gmail(email):
         await update.message.reply_text(
-            "������� ���������� Gmail � ������� `example@gmail.com`.",
+            "Введите корректный Gmail в формате `example@gmail.com`.",
             parse_mode="Markdown",
             reply_markup=cancel_keyboard(),
         )
@@ -3243,33 +3243,33 @@ async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not has_open:
         shift_names = {
-            "00-06": "?? 00:00�06:00", "06-12": "?? 06:00�12:00",
-            "12-18": "?? 12:00�18:00", "18-00": "?? 18:00�00:00",
+            "00-06": "🌙 00:00–06:00", "06-12": "🌅 06:00–12:00",
+            "12-18": "☀️ 12:00–18:00", "18-00": "🌆 18:00–00:00",
         }
         platform = context.user_data.get("platform", "")
-        open_list = " � ".join(shift_names[s] for s in open_shifts) if open_shifts else "���� ��� �������� ����"
+        open_list = " • ".join(shift_names[s] for s in open_shifts) if open_shifts else "нет открытых смен"
 
         await update.message.chat.send_action(ChatAction.TYPING)
         await asyncio.sleep(1.0)
         await update.message.reply_text(
-            "�==============================�\n"
-            "�   ?  ����� �����������     �\n"
-            "L==============================-\n\n"
-            f"������ ��������� �������! �� ��������� ����� ������ *������� ��� ������* �� *{platform}*.\n\n"
-            f"?? *������ ������ ����� ��:* {open_list}\n\n"
-            "�� ����� �������� ���� � *���� ��������* � ��� ������ ����� ���������, HR-�������� ������� ���� �����.\n\n"
-            "*������ ������� � ���� ��������?*",
+            "╔══════════════════════════════╗\n"
+            "║   📋  Лист ожидания          ║\n"
+            "╚══════════════════════════════╝\n\n"
+            f"Сейчас подходящих смен нет. Мы сохраним твою заявку на *{platform}*.\n\n"
+            f"🕒 *Открытые смены сейчас:* {open_list}\n\n"
+            "Как только появится подходящая смена, HR-менеджер лично напишет тебе в Telegram.\n\n"
+            "*Добавить тебя в лист ожидания?*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("? ��, ��������", callback_data="waitlist_yes")],
-                [InlineKeyboardButton("? ���, �������", callback_data="waitlist_no")],
+                [InlineKeyboardButton("✅ Да, добавить", callback_data="waitlist_yes")],
+                [InlineKeyboardButton("❌ Нет, спасибо", callback_data="waitlist_no")],
             ]),
         )
         return Q_WAITLIST
 
     if not save_to_sheet(context.user_data):
         await update.message.reply_text(
-            "?? �� ������� ��������� ������. ���������� ���� �����.",
+            "⚠️ Не удалось сохранить анкету. Попробуйте ещё раз.",
             reply_markup=main_keyboard(),
         )
         return ConversationHandler.END
@@ -3279,8 +3279,8 @@ async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(ChatAction.TYPING)
     await asyncio.sleep(1.0)
     await update.message.reply_text(
-        "? *������ ����������!*\n\n"
-        "������� �� ������. HR-�������� �������� � ���� � Telegram ����� ��������.",
+        "🎉 *Анкета отправлена!*\n\n"
+        "Спасибо за ответы. HR-менеджер свяжется с тобой в Telegram, когда появится подходящая смена.",
         parse_mode="Markdown",
         reply_markup=main_keyboard(),
     )
@@ -3310,18 +3310,18 @@ async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if q.data == "nda_more":
         await q.message.reply_text(
-            "?? *�������� ��� ����������� � NDA:*\n\n"
-            "1) ����������� ������ ����� ����-�����\n"
-            "2) �������� �������/ID/�����/���\n"
-            "3) ������ �� ����������� � �������� ���������\n"
-            "4) ��� ������������ �������� ������������ � ���������",
+            "📖 *Подробно про верификацию и NDA:*\n\n"
+            "1) Верификация только после тест-смены\n"
+            "2) Подходит паспорт/ID/права/ВНЖ\n"
+            "3) Данные не публикуются и защищены договором\n"
+            "4) Все материалы используются только внутри команды",
             parse_mode="Markdown",
         )
         return Q18_VERIFICATION
 
     if q.data == "verif_no":
-        await _edit_or_reply_verification_status("?? �����������: *? ���*")
-        context.user_data["verification"] = "? ���"
+        await _edit_or_reply_verification_status("🪪 Верификация: *❌ Нет*")
+        context.user_data["verification"] = "❌ Нет"
         context.user_data["user_id"] = update.effective_user.id
         context.user_data["username"] = update.effective_user.username or update.effective_user.full_name
         track_dropoff(context, f"verification_declined_at_{context.user_data.get('current_step', 'unknown')}")
@@ -3331,31 +3331,29 @@ async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         await q.message.chat.send_action(ChatAction.TYPING)
         await asyncio.sleep(1.2)
         await q.message.reply_text(
-            "�==============================�\n"
-            "�   ??  ������ ���������     �\n"
-            "L==============================-\n\n"
-            "� ���������, ����������� �������� �������� *������������ ��������* ��� ������ � Allstars.\n\n"
-            "��� �� ������� � ��� �������� ������������, ������� �������� ��� �������, ��� � ��� �������.\n\n"
-            "��� ����������� �� �� ����� ��������� ��������� � ������ � ��������� ���������� � �������.\n\n"
-            "????????????????????????????\n"
-            "_���� �� ����������� � ������ ������ ��������� � ��������� ������ ������. �� ����� ���� ������ ���� � �������! ??_",
+            "╔══════════════════════════════╗\n"
+            "║   🚫  Анкета остановлена    ║\n"
+            "╚══════════════════════════════╝\n\n"
+            "К сожалению, без верификации мы не сможем продолжить оформление в Allstars.\n\n"
+            "Это нужно для безопасности команды и соблюдения внутренних правил работы.\n\n"
+            "Если передумаешь, можешь вернуться к анкете позже. Мы будем рады продолжить!",
             parse_mode="Markdown",
             reply_markup=main_keyboard(),
         )
         return ConversationHandler.END
 
-    # ����������� � ��, ���������� ������
-    context.user_data["verification"] = "? ��"
-    await _edit_or_reply_verification_status("?? �����������: *? ��*")
+    # Верификация пройдена, продолжаем форму.
+    context.user_data["verification"] = "✅ Да"
+    await _edit_or_reply_verification_status("🪪 Верификация: *✅ Да*")
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q1_SOURCE")
     await q.message.reply_text(
-        "�������! ������ ����� ������� �� ���� ��������.",
+        "Отлично! Тогда начнём с самого начала.",
         reply_markup=source_keyboard(),
     )
     await q.message.reply_text(
-        f"{question_header(1, FORM_TOTAL_QUESTIONS)}*������ 2 �� 21:*\n"
-        "������ �� � ��� ������?\n\n"
-        "_�������� ������ �������: ��������, ��� ����� @username�, �������� � Telegram�, ���� ����� � �.�._",
+        f"{question_header(1, FORM_TOTAL_QUESTIONS)}*Вопрос 2 из 21:*\n"
+        "Откуда вы о нас узнали?\n\n"
+        "_Напишите своими словами: например, «от друга @username», «реклама в Telegram», «сам нашёл» и т.д._",
         parse_mode="Markdown",
         reply_markup=source_keyboard(),
     )
