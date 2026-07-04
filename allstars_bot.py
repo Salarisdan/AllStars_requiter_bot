@@ -173,14 +173,14 @@ MAIN_HEADERS = [
     "Стаж", "Топ страниц", "Конверсия", "Типаж моделей", "Платформы (опыт)", "Ср чек",
     "Причина ухода с прошлого места работы",
     "Основная деятельность/учеба", "График",
-    "Финансовые ожидания", "Gmail", "Верификация",
+    "Финансовые ожидания", "Email", "Верификация",
     "Скрининг", "Автотег",
 ]
 
 # ─────────────────────────────────────────────
 #  СОСТОЯНИЯ ДИАЛОГА
 # ─────────────────────────────────────────────
-Q_DUPLICATE, Q1_SOURCE, Q2_NAME, Q3_AGE, Q4_FEEDBACK, Q4_LOW_RESULT, Q4_KPI_FAIL, Q4_BOUNDARIES, Q4_CONFLICT, Q4_STRESS_CONTROL, Q5_ENGLISH, Q6_PLATFORM, Q7_SHIFT, Q8_EXPERIENCE, Q9_TOP_PAGES, Q10_CONVERSION, Q11_MODEL_TYPES, Q12_WORKED_PLATFORMS, Q13_REASON_LEAVE, Q13_FINANCIAL, Q14_GMAIL, Q15_AVG_CHECK, Q16_MAIN_ACTIVITY, Q16B_ACTIVITY_DETAIL, Q17_SCHEDULE, Q18_VERIFICATION, Q_WAITLIST = range(27)
+Q_DUPLICATE, Q1_SOURCE, Q2_NAME, Q3_AGE, Q4_FEEDBACK, Q4_LOW_RESULT, Q4_KPI_FAIL, Q4_BOUNDARIES, Q4_CONFLICT, Q4_STRESS_CONTROL, Q5_ENGLISH, Q6_PLATFORM, Q7_SHIFT, Q8_EXPERIENCE, Q9_TOP_PAGES, Q10_CONVERSION, Q11_MODEL_TYPES, Q12_WORKED_PLATFORMS, Q13_REASON_LEAVE, Q13_FINANCIAL, Q14_EMAIL, Q15_AVG_CHECK, Q16_MAIN_ACTIVITY, Q16B_ACTIVITY_DETAIL, Q17_SCHEDULE, Q18_VERIFICATION, Q_WAITLIST = range(27)
 
 # ─────────────────────────────────────────────
 #  GOOGLE SHEETS — кэшированный клиент
@@ -1416,7 +1416,7 @@ def get_waitlist_sheet():
                 "Стаж", "Топ страниц", "Конверсия", "Типаж моделей", "Платформы (опыт)", "Ср чек",
                 "Причина ухода с прошлого места работы",
                 "Основная деятельность/учеба", "График",
-                "Финансовые ожидания", "Gmail", "Верификация", "Скрининг", "Автотег",
+                "Финансовые ожидания", "Email", "Верификация", "Скрининг", "Автотег",
             ])
             return sheet
     except Exception as e:
@@ -1621,9 +1621,9 @@ def find_existing_application_row(user_id: int) -> int | None:
     return None
 
 
-def is_valid_gmail(email: str) -> bool:
-    email = (email or "").strip().lower()
-    return bool(re.fullmatch(r"[a-z0-9._%+-]+@gmail\.com", email))
+def is_valid_email(email: str) -> bool:
+    email = (email or "").strip()
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email))
 
 
 def _parse_number(text: str) -> float | None:
@@ -3205,29 +3205,29 @@ async def q17_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return Q17_SCHEDULE
 
     context.user_data["work_schedule"] = schedule
-    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q14_GMAIL")
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q14_EMAIL")
 
     await update.message.reply_text(
         f"{question_header(20, FORM_TOTAL_QUESTIONS)}*Вопрос 21 из 21:*\n"
-        "Напишите, пожалуйста, ваш Gmail — HR отправит на него обучающий гайд:",
+        "Напишите, пожалуйста, ваш email — HR отправит на него обучающий гайд:",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
-    return Q14_GMAIL
+    return Q14_EMAIL
 
 
-async def q14_gmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def q14_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "❌ Отменить заполнение":
         return await cancel(update, context)
 
     email = update.message.text.strip().lower()
-    if not is_valid_gmail(email):
+    if not is_valid_email(email):
         await update.message.reply_text(
-            "Введите корректный Gmail в формате `example@gmail.com`.",
+            "Введите корректный email в формате `example@mail.com`.",
             parse_mode="Markdown",
             reply_markup=cancel_keyboard(),
         )
-        return Q14_GMAIL
+        return Q14_EMAIL
 
     context.user_data["email"] = email
     context.user_data["user_id"] = update.effective_user.id
@@ -3676,7 +3676,7 @@ def main():
             Q12_WORKED_PLATFORMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, q12_worked_platforms)],
             Q13_REASON_LEAVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, q13_reason_leave)],
             Q13_FINANCIAL:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q13_financial)],
-            Q14_GMAIL:        [MessageHandler(filters.TEXT & ~filters.COMMAND, q14_gmail)],
+            Q14_EMAIL:        [MessageHandler(filters.TEXT & ~filters.COMMAND, q14_email)],
             Q15_AVG_CHECK:    [MessageHandler(filters.TEXT & ~filters.COMMAND, q15_avg_check)],
             Q16_MAIN_ACTIVITY:[MessageHandler(filters.TEXT & ~filters.COMMAND, q16_main_activity)],
             Q16B_ACTIVITY_DETAIL:[MessageHandler(filters.TEXT & ~filters.COMMAND, q16b_activity_detail)],
