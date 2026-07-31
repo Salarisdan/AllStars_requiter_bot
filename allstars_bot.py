@@ -78,8 +78,8 @@ _load_local_env()
 # ─────────────────────────────────────────────
 BOT_TOKEN        = _required_env("BOT_TOKEN")
 HR_CHAT_ID = _optional_env_int("HR_CHAT_ID")
-BOT_USERNAME     = os.getenv("BOT_USERNAME", "allstars_hr_bot")
-BANNER_GDRIVE_ID = "1-15wE_zOrskUqb5sClN4hTS_Bi91AlwE"
+BOT_USERNAME     = os.getenv("BOT_USERNAME", "ma_agency_bot")
+BANNER_GDRIVE_ID = "1a_vUQOdm1huwSc5w1dKcbPHWADcrz_Y1"
 HR_TOPIC_GUIDE_ID = _optional_env_int("HR_TOPIC_GUIDE_ID")
 HR_TOPIC_TEST_SHIFT_ID = _optional_env_int("HR_TOPIC_TEST_SHIFT_ID")
 MSK_TZ = ZoneInfo("Europe/Moscow")
@@ -155,9 +155,9 @@ def load_google_creds() -> dict:
 
 
 GOOGLE_CREDS = load_google_creds()
-SPREADSHEET_NAME = os.environ.get("GOOGLE_SPREADSHEET_NAME", "AllStarsLeads")
+SPREADSHEET_NAME = os.environ.get("GOOGLE_SPREADSHEET_NAME", "MAAgencyLeads")
 SPREADSHEET_ID = os.environ.get("GOOGLE_SPREADSHEET_ID", "").strip()
-MAIN_WORKSHEET_TITLE = os.environ.get("GOOGLE_MAIN_WORKSHEET_NAME", "AllStarsLeads")
+MAIN_WORKSHEET_TITLE = os.environ.get("GOOGLE_MAIN_WORKSHEET_NAME", "MAAgencyLeads")
 FUNNEL_WORKSHEET_TITLE = os.environ.get("GOOGLE_FUNNEL_WORKSHEET_NAME", "Воронка")
 FUNNEL_STAGE_GUIDE = os.environ.get("FUNNEL_STAGE_GUIDE", "изучает гайд")
 MAIN_HEADERS = [
@@ -192,7 +192,7 @@ _gs_leads = None       # Лист с лидами (первый запуск /st
 _gs_starts = None      # Лист со всеми событиями /start
 _gs_funnel = None      # Лист с этапами воронки
 
-ANALYTICS_DB_PATH = Path(os.getenv("BOT_ANALYTICS_DB_PATH", Path(__file__).with_name("allstars_bot_analytics.sqlite3")))
+ANALYTICS_DB_PATH = Path(os.getenv("BOT_ANALYTICS_DB_PATH", Path(__file__).with_name("ma_agency_bot_analytics.sqlite3")))
 _analytics_bootstrapped = False
 
 
@@ -894,6 +894,16 @@ def _week_start_sunday(dt: datetime) -> datetime:
     return base.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _parse_stats_date(raw: str) -> datetime:
+    value = (raw or "").strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(value, fmt).replace(tzinfo=MSK_TZ)
+        except ValueError:
+            continue
+    raise ValueError("Дата должна быть в формате YYYY-MM-DD или DD.MM.YYYY")
+
+
 def _parse_period_args(args: list[str]) -> tuple[datetime | None, datetime | None, str]:
     now_msk = datetime.now(MSK_TZ)
     if not args:
@@ -924,22 +934,29 @@ def _parse_period_args(args: list[str]) -> tuple[datetime | None, datetime | Non
         start = end - timedelta(days=1)
         return start, end, f"вчера: {start.strftime('%d.%m.%Y')}"
 
+    # /stats 2026-06-01 2026-06-07
     # /stats range 2026-06-01 2026-06-07
-    if token == "range":
-        if len(args) < 3:
+    if token == "range" or len(args) >= 2:
+        if token == "range" and len(args) < 3:
             raise ValueError("Использование: /stats range YYYY-MM-DD YYYY-MM-DD")
-        try:
-            start = datetime.strptime(args[1], "%Y-%m-%d").replace(tzinfo=MSK_TZ)
-            end_inclusive = datetime.strptime(args[2], "%Y-%m-%d").replace(tzinfo=MSK_TZ)
-        except ValueError:
-            raise ValueError("Дата должна быть в формате YYYY-MM-DD")
+        if token != "range" and len(args) < 2:
+            raise ValueError("Использование: /stats YYYY-MM-DD YYYY-MM-DD")
+
+        date_args = args[1:3] if token == "range" else args[:2]
+        start = _parse_stats_date(date_args[0])
+        end_inclusive = _parse_stats_date(date_args[1])
         if end_inclusive < start:
             raise ValueError("Конечная дата не может быть раньше начальной")
         end = end_inclusive + timedelta(days=1)
         return start, end, f"период: {start.strftime('%d.%m.%Y')} - {end_inclusive.strftime('%d.%m.%Y')}"
 
+    if len(args) == 1:
+        start = _parse_stats_date(args[0])
+        end = start + timedelta(days=1)
+        return start, end, f"день: {start.strftime('%d.%m.%Y')}"
+
     raise ValueError(
-        "Неизвестный период. Используйте: week, prev_week, day, yesterday, all, range YYYY-MM-DD YYYY-MM-DD"
+        "Неизвестный период. Используйте: week, prev_week, day, yesterday, all, /stats YYYY-MM-DD YYYY-MM-DD или /stats range YYYY-MM-DD YYYY-MM-DD"
     )
 
 
@@ -966,7 +983,7 @@ def _collect_submission_sets(
     waitlist_submissions: set[str] = set()
 
     sources = (
-        (get_main_worksheet, "allstars", main_submissions),
+        (get_main_worksheet, "ma_agency", main_submissions),
         (get_waitlist_sheet, "waitlist", waitlist_submissions),
     )
 
@@ -1107,7 +1124,7 @@ def has_reminder_marker(comments: str, row_number: int) -> bool:
 async def interview_reminder_job(context: ContextTypes.DEFAULT_TYPE):
     """
     Каждые 5 минут:
-    - читает AllStarsLeads
+    - читает MAAgencyLeads
     - ищет статус 'Собеседование'
     - если до собеса <= 60 минут и > 0 минут
     - и ещё не отправляли reminder
@@ -1146,7 +1163,7 @@ async def interview_reminder_job(context: ContextTypes.DEFAULT_TYPE):
         idx_comments = col_idx("Комментарии")
 
         if min(idx_user_id, idx_status, idx_date, idx_time, idx_comments) == -1:
-            logger.error("Reminder job: required columns not found in AllStarsLeads")
+            logger.error("Reminder job: required columns not found in MAAgencyLeads")
             return
 
         now_msk = datetime.now(ZoneInfo("Europe/Moscow"))
@@ -1189,7 +1206,7 @@ async def interview_reminder_job(context: ContextTypes.DEFAULT_TYPE):
 
                 text = (
                     f"Привет! 🙌\n\n"
-                    f"Напоминаем, что у вас сегодня собеседование с Allstars\n"
+                    f"Напоминаем, что у вас сегодня собеседование с MA Agency\n"
                     f"в {interview_time} по мск.\n\n"
                     f"Будем ждать 😊"
                 )
@@ -1576,7 +1593,7 @@ async def form_reminder_2h_job(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
-            "Привет! Напоминаем про анкету в Allstars 🙌\n\n"
+            "Привет! Напоминаем про анкету в MA Agency 🙌\n\n"
             "Ты остановился(ась) на середине заполнения."
             " Вернуться можно в любой момент через кнопку «📝 Заполнить анкету»."
         ),
@@ -1676,24 +1693,22 @@ def score_candidate(data: dict) -> tuple[str, str]:
 # ─────────────────────────────────────────────
 
 WELCOME_TEXT = """\
-✦ ── ✦ ── ✦  *ALLSTARS AGENCY*  ✦ ── ✦ ── ✦
+✦ ── ✦ ── ✦  *MA AGENCY*  ✦ ── ✦ ── ✦
 
-Мы — профессиональное агентство по работе с моделями на OnlyFans и Fansly.
+Мы — агентство по работе с моделями на OnlyFans и Fansly.
 
-_3 года на рынке · 16 активных моделей · Реальный карьерный рост_
-
-Выбери раздел, который тебя интересует 👇\
+_Выбери раздел, который тебя интересует 👇_\
 """
 
 # ── ОБ АГЕНТСТВЕ ──
-ABOUT_MENU_TEXT = "🏆 *ЧТО ТАКОЕ ALLSTARS?*\n\nВыбери тему, чтобы узнать подробнее:"
+ABOUT_MENU_TEXT = "🏆 *ЧТО ТАКОЕ MA AGENCY?*\n\nВыбери тему, чтобы узнать подробнее:"
 
 ABOUT_AGENCY_TEXT = """\
 ╔══════════════════════════════╗
 ║      🏆  О АГЕНТСТВЕ        ║
 ╚══════════════════════════════╝
 
-*Allstars* — агентство полного цикла по ведению моделей на платформах OnlyFans и Fansly.
+*MA Agency* — агентство по работе с моделями на OnlyFans и Fansly.
 
 📅 *На рынке:* 3 года
 🔧 *Формат:* полное ведение — от стратегии до продаж
@@ -1778,7 +1793,7 @@ _Ничего не нужно устанавливать — работаешь 
 
 TOOLS_CRM_TEXT = """\
 ╔══════════════════════════════╗
-║  ⚙️  CRM ALLSTARS           ║
+║  ⚙️  CRM MA AGENCY         ║
 ╚══════════════════════════════╝
 
 Помимо OnlyMonster у нас есть *собственная CRM* — единая экосистема агентства.
@@ -1803,7 +1818,7 @@ TOOLS_AI_TEXT = """\
 ║  🤖  AI-ТЕХНОЛОГИИ          ║
 ╚══════════════════════════════╝
 
-Одна из сильных сторон Allstars — активное использование AI.
+Одна из сильных сторон MA Agency — активное использование AI.
 
 Это сделано *не для замены людей*, а чтобы оператор зарабатывал быстрее и больше.
 
@@ -1896,36 +1911,12 @@ CONDITIONS_TEXT = """\
 ║   💰  УСЛОВИЯ РАБОТЫ        ║
 ╚══════════════════════════════╝
 
-💵 *Ставка:* 20% от тотала + 2% за выполнение плана
-📅 *Выплаты:* каждый вторник
-🔐 *Формат:* криптокошелёк
+💵 *Ставка:* 20% от тотала
+📅 *Выплаты:* раз в месяц 10 числа
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🌐 *Английский:* обязателен от уровня A2+
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔥 *БОНУСНАЯ СИСТЕМА*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-👥 *За реферала:*
-├ +100$ за каждого, кто отработает месяц
-└ +200$, если реферал сделает 3k+ за месяц
-
-🎯 *Бонусы за кастомы в неделю:*
-├ 3 кастома → +25$
-├ 5 кастомов → +35$
-└ 7+ кастомов → +45$
-
-📊 Личный недельный план с доп. мотивацией
-📨 Платные рассылки & продажи архива
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚀 *КАРЬЕРНЫЙ РОСТ*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🎓 Ментор — обучает новичков
-⭐ Старший оператор — проверяет диалоги
-👑 Тимлид — управляет командой
-
-_Если есть амбиции — у нас есть куда расти!_\
+💼 *Формат:* удалённая работа
 """
 
 # ── NDA ──
@@ -1994,11 +1985,7 @@ def main_keyboard():
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton("📝 Заполнить анкету")],
-            [KeyboardButton("📘 Гайд агентства Allstars")],
-            [KeyboardButton("🏢 Об агентстве"),     KeyboardButton("🛠 Инструменты")],
-            [KeyboardButton("💰 Условия работы"),   KeyboardButton("🎓 Обучение")],
-            [KeyboardButton("📋 NDA и верификация"), KeyboardButton("❓ FAQ")],
-            [KeyboardButton("👥 Поделиться с другом")],
+            [KeyboardButton("� Условия работы")],
         ],
         resize_keyboard=True,
     )
@@ -2012,7 +1999,7 @@ def about_inline_keyboard():
 def tools_inline_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🌐 OnlyMonster",          callback_data="tool_onlymonster")],
-        [InlineKeyboardButton("⚙️ CRM Allstars",         callback_data="tool_crm")],
+        [InlineKeyboardButton("⚙️ CRM MA Agency",         callback_data="tool_crm")],
         [InlineKeyboardButton("🤖 AI-технологии",        callback_data="tool_ai")],
         [InlineKeyboardButton("🎬 Работа с контентом",   callback_data="tool_content")],
     ])
@@ -2178,7 +2165,7 @@ async def notify_hr(context: ContextTypes.DEFAULT_TYPE, data: dict):
         return str(val).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
 
     text = (
-        "🔔 *Новая заявка AllStars!*\n\n"
+        "🔔 *Новая заявка MA Agency!*\n\n"
         f"*Скрининг:* {e(data.get('screening', '—'))}\n"
         f"*Автотег:* {e(data.get('auto_tag', '—'))}\n\n"
         f"*Английский:* {e(data.get('english', '—'))}\n"
@@ -2265,15 +2252,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await typing(update, delay=1.4)
     await update.message.reply_text(
-        "Я бот агентства *Allstars* — помогу тебе узнать всё о работе у нас и отправить заявку.",
+        "Я бот агентства *MA Agency* — помогу тебе узнать всё о работе у нас и отправить заявку.",
         parse_mode="Markdown",
     )
     await asyncio.sleep(0.6)
 
     await typing(update, delay=1.0)
     await update.message.reply_text(
-        "Мы работаем на рынке *3 года*, ведём *16 моделей* на OnlyFans и Fansly.\n"
-        "Здесь ты найдёшь всю информацию — от условий до инструментов. 🚀",
+        "Мы работаем с моделями на OnlyFans и Fansly и помогаем быстро разобраться в условиях и подать заявку. 🚀",
         parse_mode="Markdown",
     )
     await asyncio.sleep(0.5)
@@ -2281,7 +2267,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Баннер с подписью ──
     await send_banner(
         update, context,
-        caption="✦ ── ✦ ── ✦  *ALLSTARS AGENCY*  ✦ ── ✦ ── ✦\n\n_Выбери раздел, который тебя интересует_ 👇",
+        caption="✦ ── ✦ ── ✦  *MA AGENCY*  ✦ ── ✦ ── ✦\n\n_Выбери раздел, который тебя интересует_ 👇",
     )
 
     # ── Главное меню с кнопкой «Поделиться» ──
@@ -2303,13 +2289,13 @@ async def start_form_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q18_VERIFICATION")
+    set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q1_SOURCE")
     await send_section_photo(
         update,
         gdrive_id=SECTION_IMAGES["form"],
         cache_key="form",
         caption=(
-            "📋 *Анкета Allstars*\n\n"
+            "📋 *Анкета MA Agency*\n\n"
             "20 вопросов · ~5 минут\n\n"
             "_Нажми кнопку ниже, чтобы начать 👇_"
         ),
@@ -2317,19 +2303,15 @@ async def start_form_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.sleep(0.4)
     await update.effective_chat.send_message(
         text=(
-            f"{question_header(0, FORM_TOTAL_QUESTIONS)}"
+            f"{question_header(1, FORM_TOTAL_QUESTIONS)}"
             "*Вопрос 1 из 21:*\n"
-            "*Верификация и NDA (кратко):*\n"
-            "• Документы только после тест-смены\n"
-            "• Данные защищены NDA\n"
-            "• Нужно для безопасности команды и моделей\n\n"
-            "Нажмите «Показать подробнее», если хотите полную версию.\n\n"
-            "*Готовы пройти верификацию после тест-смены?*"
+            "Откуда вы о нас узнали?\n\n"
+            "_Напишите своими словами: например, «от друга @username», «реклама в Telegram», «сам нашёл» и т.д._"
         ),
         parse_mode="Markdown",
-        reply_markup=verification_reply_keyboard(),
+        reply_markup=source_keyboard(),
     )
-    return Q18_VERIFICATION
+    return Q1_SOURCE
 
 
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2350,49 +2332,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return await start_form_flow(update, context)
 
-    elif text == "🏢 Об агентстве":
-        await send_section_photo(
-            update,
-            gdrive_id=SECTION_IMAGES["about"],
-            cache_key="about",
-            caption=(
-                "🏢 *Об агентстве*\n\n"
-                "_3 года на рынке · 16 моделей · Системный подход_\n\n"
-                "Выбери тему 👇"
-            ),
-            reply_markup=about_inline_keyboard(),
-        )
-
-    elif text == "🛠 Инструменты":
-        await send_section_photo(
-            update,
-            gdrive_id=SECTION_IMAGES["tools"],
-            cache_key="tools",
-            caption=(
-                "🛠 *Инструменты и экосистема*\n\n"
-                "_OnlyMonster · CRM · AI-технологии · Контент_\n\n"
-                "Выбери тему 👇"
-            ),
-            reply_markup=tools_inline_keyboard(),
-        )
-
-    elif text == "📘 Гайд агентства Allstars":
-        await typing(update, delay=0.6)
-        await update.message.reply_text(
-            "📘 *Гайд агентства Allstars*\n\n"
-            "Почему доступ закрыт:\n"
-            "1) Материалы доступны только кандидатам после проверки\n"
-            "2) Доступ выдает HR после заполнения анкеты\n\n"
-            "✅ Уже 120+ кандидатов прошли этот этап и получили доступ к гайдам.\n\n"
-            "Ссылки на материалы не показываются в боте. После анкеты HR выдаст доступ напрямую.\n\n"
-            "Подтвердите, что вы понимаете это условие, и продолжим анкету.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("☑️ Я понимаю, что доступ выдаст HR", callback_data="guide_ack")],
-                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="guide_back_menu")],
-            ]),
-        )
-
     elif text == "💰 Условия работы":
         await typing(update, delay=0.8)
         await send_section_photo(
@@ -2401,61 +2340,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cache_key="conditions",
             caption=CONDITIONS_TEXT,
             reply_markup=main_keyboard(),
-        )
-
-    elif text == "🎓 Обучение":
-        await typing(update, delay=0.8)
-        await send_section_photo(
-            update,
-            gdrive_id=SECTION_IMAGES["training"],
-            cache_key="training",
-            caption=TRAINING_TEXT,
-            reply_markup=main_keyboard(),
-        )
-
-    elif text == "📋 NDA и верификация":
-        await typing(update, delay=0.6)
-        await send_section_photo(
-            update,
-            gdrive_id=SECTION_IMAGES["nda"],
-            cache_key="nda",
-            caption=(
-                "📋 *NDA и верификация — кратко*\n\n"
-                "• Документы запрашиваем только после тест-смены\n"
-                "• Это стандарт безопасности для защиты моделей и команды\n"
-                "• Данные не передаются третьим лицам\n\n"
-                "Нажмите «Показать подробнее», если хотите полный регламент."
-            ),
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📖 Показать подробнее", callback_data="nda_menu_more")],
-                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="guide_back_menu")],
-            ]),
-        )
-
-    elif text == "❓ FAQ":
-        await typing(update, delay=0.6)
-        await send_section_photo(
-            update,
-            gdrive_id=SECTION_IMAGES["faq"],
-            cache_key="faq",
-            caption=FAQ_TEXT,
-            reply_markup=main_keyboard(),
-        )
-
-    elif text == "👥 Поделиться с другом":
-        share_url = f"https://t.me/{BOT_USERNAME}?start=ref"
-        await update.message.reply_text(
-            "🤝 *Поделись с другом!*\n\n"
-            "Отправь другу эту ссылку — и если он отработает месяц, ты получишь *+100$*.\n"
-            "А если сделает 3k+ — *+200$* 🔥\n\n"
-            f"👉 {share_url}",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    "📤 Поделиться",
-                    switch_inline_query=f"Присоединяйся к команде Allstars! {share_url}",
-                )
-            ]]),
         )
 
     elif text == "❌ Отменить заполнение":
@@ -2681,7 +2565,7 @@ async def q3_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q4_FEEDBACK")
     await update.message.reply_text(
         f"{question_header(4, FORM_TOTAL_QUESTIONS)}*Вопрос 5 из 21:*\n"
-        "Расскажи о твоем самом классном рабочем дне в адалте?\n\n"
+        "Расскажи о своём самом сильном рабочем дне.\n\n"
         "_Ответ можно коротко или развернуто._",
         parse_mode="Markdown", reply_markup=cancel_keyboard(),
     )
@@ -2704,7 +2588,7 @@ async def q4_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q4_LOW_RESULT")
     await update.message.reply_text(
         f"{question_header(5, FORM_TOTAL_QUESTIONS)}*Вопрос 6 из 21:*\n"
-        "О чем ты мечтаешь?\n\n"
+        "О чём ты мечтаешь в работе?\n\n"
         "_Ответ можно коротко или развернуто._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -2728,7 +2612,7 @@ async def q4_low_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_form_step(context, update.effective_user.id, update.effective_chat.id, "Q4_KPI_FAIL")
     await update.message.reply_text(
         f"{question_header(6, FORM_TOTAL_QUESTIONS)}*Вопрос 7 из 21:*\n"
-        "Что для вас крутой ТимЛид?\n\n"
+        "Что для тебя значит сильный руководитель?\n\n"
         "_Ответ можно коротко или развернуто._",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
@@ -3209,7 +3093,7 @@ async def q17_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"{question_header(20, FORM_TOTAL_QUESTIONS)}*Вопрос 21 из 21:*\n"
-        "Напишите, пожалуйста, ваш email — HR отправит на него обучающий гайд:",
+        "Напишите, пожалуйста, ваш email — мы используем его для связи по дальнейшему процессу:",
         parse_mode="Markdown",
         reply_markup=cancel_keyboard(),
     )
@@ -3334,7 +3218,7 @@ async def q18_verification_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
             "╔══════════════════════════════╗\n"
             "║   🚫  Анкета остановлена    ║\n"
             "╚══════════════════════════════╝\n\n"
-            "К сожалению, без верификации мы не сможем продолжить оформление в Allstars.\n\n"
+            "К сожалению, без верификации мы не сможем продолжить оформление в MA Agency.\n\n"
             "Это нужно для безопасности команды и соблюдения внутренних правил работы.\n\n"
             "Если передумаешь, можешь вернуться к анкете позже. Мы будем рады продолжить!",
             parse_mode="Markdown",
@@ -3391,7 +3275,7 @@ async def q18_verification_text(update: Update, context: ContextTypes.DEFAULT_TY
             "╔══════════════════════════════╗\n"
             "║   😔  ЗАЯВКА ОТКЛОНЕНА     ║\n"
             "╚══════════════════════════════╝\n\n"
-            "К сожалению, верификация личности является *обязательным условием* для работы в Allstars.\n\n"
+            "К сожалению, верификация личности является *обязательным условием* для работы в MA Agency.\n\n"
             "Это не прихоть — это стандарт безопасности, который защищает как моделей, так и всю команду.\n\n"
             "Без верификации мы не можем допустить оператора к работе с реальными страницами и данными.\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -3464,7 +3348,7 @@ async def guide_ack_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Funnel stage auto-register error: {type(e).__name__}: {e}", exc_info=True)
 
     await q.edit_message_text(
-        "📘 *Гайд агентства Allstars*\n\n"
+        "📘 *MA Agency*\n\n"
         "✅ Условие зафиксировано: доступ к материалам выдает HR после анкеты.\n\n"
         "Ссылки в боте не показываются. После анкеты HR выдаст доступ напрямую.",
         parse_mode="Markdown",
@@ -3721,13 +3605,12 @@ def main():
     # Меню
     app.add_handler(MessageHandler(
         filters.Regex(
-            "^(📘 Гайд агентства Allstars|🏢 Об агентстве|🛠 Инструменты|💰 Условия работы"
-            "|🎓 Обучение|📋 NDA и верификация|❓ FAQ|👥 Поделиться с другом)$"
+            "^(� Заполнить анкету|💰 Условия работы)$"
         ),
         handle_menu,
     ))
 
-    logger.info("🚀 AllStars Bot started!")
+    logger.info("🚀 MA Agency bot started!")
     # Explicitly request all update types so callback_query updates are always delivered.
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
